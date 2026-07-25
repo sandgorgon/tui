@@ -170,11 +170,11 @@ No dependency on the system terminfo/termcap database. Detection is layered:
 |---|---|
 | `term` | Raw/cooked mode via termios ioctls, capability probing, SIGWINCH/SIGCONT/SIGTSTP handling, terminal size queries |
 | `input` | Byte-stream state machine decoding CSI-u/kitty keyboard protocol, legacy xterm key sequences, SGR mouse (1006), bracketed paste (2004), focus events (1004) into typed `Event`s |
-| `cell` | `Cell{Rune, Style, Width}`, `Buffer`, `Painter` (clipped sub-rect drawing API), hand-rolled East Asian width + emoji width tables |
-| `render` | Front/back buffer diff engine (§3.2), ANSI/SGR output writer, synchronized-update wrapping |
+| `cell` | `Color`/`Attr`/`Style` (the core color model — 16/256/truecolor — and text attributes; see note below), `Cell{Rune, Style, Width}`, `Buffer`, `Painter` (clipped sub-rect drawing API), hand-rolled East Asian width + emoji width tables |
+| `render` | Front/back buffer diff engine (§3.2), ANSI/SGR output writer (including truecolor→256→16 downsampling — an encoding concern, not a data-model one, so it lives here rather than in `cell`), synchronized-update wrapping |
 | `layout` | `Constraint`, `Rect`, horizontal/vertical split solver, nesting, gaps/margins |
 | `tui` | `App`, `Model`/`Update`/`View`, `Node` tree + `Key()`, reconciler (§3.1), `Cmd`/`Msg` plumbing, focus-tree traversal (Tab/Shift-Tab), modal focus scoping |
-| `style` | Color model (16/256/truecolor with automatic downsampling), `Style` (bold/italic/underline variants/strikethrough/reverse), theming API |
+| `style` | A theming layer built on `cell.Color`/`cell.Style` (not a redefinition of them — resolved during M2, since `cell.Cell` needs a concrete `Style` type at L2, three layers below where `style` sits): named/semantic colors, adaptive light/dark palettes, a small builder API that `widget` consumes |
 | `widget` | The component catalog — see §5 |
 | `pty` | PTY allocation/attach/resize/signals — see §6 |
 | `vt` | VT100/xterm parser + screen model — see §7 |

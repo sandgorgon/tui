@@ -8,14 +8,14 @@ type Size struct {
 	Cols int
 }
 
-// withFd runs fn with the raw file descriptor underlying f, via
+// WithFd runs fn with the raw file descriptor underlying f, via
 // SyscallConn rather than f.Fd(). This matters: f.Fd() permanently
 // disables f's SetReadDeadline (documented Unix/Windows behavior in the
 // os package), which would silently break term.Probe and any
 // input.Decoder reading from the same *os.File afterward. SyscallConn's
 // Control callback hands back the fd for the duration of one syscall
 // without that side effect.
-func withFd(f *os.File, fn func(fd int) error) error {
+func WithFd(f *os.File, fn func(fd int) error) error {
 	conn, err := f.SyscallConn()
 	if err != nil {
 		return err

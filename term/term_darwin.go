@@ -100,7 +100,7 @@ type State struct {
 // IsTerminal reports whether f refers to a terminal.
 func IsTerminal(f *os.File) bool {
 	ok := false
-	_ = withFd(f, func(fd int) error {
+	_ = WithFd(f, func(fd int) error {
 		_, err := getTermios(fd)
 		ok = err == nil
 		return nil
@@ -111,7 +111,7 @@ func IsTerminal(f *os.File) bool {
 // GetSize returns the terminal's current dimensions.
 func GetSize(f *os.File) (Size, error) {
 	var size Size
-	err := withFd(f, func(fd int) error {
+	err := WithFd(f, func(fd int) error {
 		var ws winsize
 		if err := ioctl(fd, tiocgwinsz, unsafe.Pointer(&ws)); err != nil {
 			return err
@@ -125,7 +125,7 @@ func GetSize(f *os.File) (Size, error) {
 // SetSize sets a terminal's dimensions. It's meaningful on a pty slave
 // (see package pty), not on the host's own real terminal.
 func SetSize(f *os.File, s Size) error {
-	return withFd(f, func(fd int) error {
+	return WithFd(f, func(fd int) error {
 		ws := winsize{Row: uint16(s.Rows), Col: uint16(s.Cols)}
 		return ioctl(fd, tiocswinsz, unsafe.Pointer(&ws))
 	})
@@ -135,7 +135,7 @@ func SetSize(f *os.File, s Size) error {
 // changing it.
 func GetState(f *os.File) (*State, error) {
 	var state State
-	err := withFd(f, func(fd int) error {
+	err := WithFd(f, func(fd int) error {
 		t, err := getTermios(fd)
 		if err != nil {
 			return err
@@ -154,7 +154,7 @@ func GetState(f *os.File) (*State, error) {
 // later be restored with Restore.
 func MakeRaw(f *os.File) (*State, error) {
 	var prev State
-	err := withFd(f, func(fd int) error {
+	err := WithFd(f, func(fd int) error {
 		t, err := getTermios(fd)
 		if err != nil {
 			return err
@@ -179,7 +179,7 @@ func MakeRaw(f *os.File) (*State, error) {
 
 // Restore restores a terminal to a previously saved state.
 func Restore(f *os.File, state *State) error {
-	return withFd(f, func(fd int) error {
+	return WithFd(f, func(fd int) error {
 		t := state.termios
 		return setTermios(fd, &t)
 	})

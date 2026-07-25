@@ -68,7 +68,7 @@ func run() error {
 	os.Stdout.WriteString("\x1b[?1049h")
 	defer os.Stdout.WriteString("\x1b[?1049l")
 
-	caps := term.Probe(os.Stdin, os.Stdout, 200*time.Millisecond, term.DetectEnv(os.Getenv))
+	caps, leftover := term.Probe(os.Stdin, os.Stdout, 500*time.Millisecond, term.DetectEnv(os.Getenv))
 	renderer := render.NewRenderer(render.Options{
 		ColorLevel:         caps.ColorLevel,
 		SynchronizedOutput: caps.SynchronizedOutput,
@@ -79,6 +79,15 @@ func run() error {
 		go p.readLoop()
 	}
 
+	// Probe can leave bytes unread (a terminal's reply arriving late, or
+	// the user's own early keystrokes) — route them to the focused pane
+	// first, before real input starts flowing, or they'd be lost. This
+	// is the fix for the bug where a terminal's own DA1/DECRQM reply
+	// showed up as if typed into the left pane's shell.
+	if len(leftover) > 0 {
+		routeInput(leftover, panes, &focused)
+	}
+
 	exited := make(chan struct{})
 	go func() {
 		for _, p := range panes {
@@ -87,13 +96,28 @@ func run() error {
 		close(exited)
 	}()
 
+	// term.Probe's own timeout is the primary defense against a
+	// terminal's DA1/DECRQM reply leaking into input, but a slow or
+	// batching terminal can still reply after Probe has already given
+	// up — Probe genuinely never sees those bytes, so it has nothing to
+	// return as leftover; they just arrive on a later, ordinary read.
+	// Keep filtering reads for a further grace period to catch that
+	// case too (see term.StripLateReply's doc comment).
+	probeGraceDeadline := time.Now().Add(2 * time.Second)
+
 	inputErr := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 4096)
 		for {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
-				routeInput(buf[:n], panes, &focused)
+				chunk := buf[:n]
+				if time.Now().Before(probeGraceDeadline) {
+					chunk = term.StripLateReply(chunk)
+				}
+				if len(chunk) > 0 {
+					routeInput(chunk, panes, &focused)
+				}
 			}
 			if err != nil {
 				inputErr <- err

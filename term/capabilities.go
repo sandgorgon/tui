@@ -1,6 +1,7 @@
 package term
 
 import (
+	"bytes"
 	"os"
 	"strconv"
 	"strings"
@@ -116,14 +117,23 @@ func lookupTerm(term string) (Capabilities, bool) {
 // If in/out aren't connected to a real, responsive terminal, or nothing
 // arrives within timeout, base is returned unchanged.
 //
-// Probe consumes whatever bytes arrive on in during the probe window, so
-// it must run before the application starts reading real input — any
-// keystroke the user makes during that (short) window would otherwise be
-// lost. This is the standard, universally-accepted tradeoff of active
-// terminal probing at startup.
-func Probe(in, out *os.File, timeout time.Duration, base Capabilities) Capabilities {
+// Any bytes Probe reads that aren't part of a recognized reply are
+// returned as leftover — bytes that arrive during the probe window
+// aren't necessarily the terminal's reply; they could be the user's own
+// early keystrokes, and either way they must not be silently discarded.
+// Callers MUST prepend leftover to whatever they read next (feed it to
+// their input.Decoder, or forward it to a pty) rather than drop it. This
+// isn't optional: a terminal's reply can legitimately arrive after
+// Probe's timeout (a slow terminal, or one that batches replies), and if
+// Probe simply discarded unread-but-arriving-late bytes, they'd still
+// land in the file descriptor and get picked up by whatever reads it
+// next — which, in a program that forwards raw input to a child (e.g. a
+// pty), means the terminal's own DA1/DECRQM reply ends up forwarded as
+// if the user had typed it. That's not hypothetical: it's exactly what
+// happened before this was fixed (see examples/multiplexer).
+func Probe(in, out *os.File, timeout time.Duration, base Capabilities) (Capabilities, []byte) {
 	if _, err := out.Write([]byte("\x1b[c\x1b[?2026$p")); err != nil {
-		return base
+		return base, nil
 	}
 
 	// If nothing answers at all (piped output, dumb terminal), wait the
@@ -138,7 +148,7 @@ func Probe(in, out *os.File, timeout time.Duration, base Capabilities) Capabilit
 	buf := make([]byte, 256)
 	for len(total) < 256 {
 		if err := in.SetReadDeadline(deadline); err != nil {
-			return base
+			return base, total
 		}
 		n, err := in.Read(buf)
 		if n > 0 {
@@ -154,46 +164,110 @@ func Probe(in, out *os.File, timeout time.Duration, base Capabilities) Capabilit
 	in.SetReadDeadline(time.Time{})
 
 	result := base
-	if hasDA1(total) {
+	remaining := total
+	if start, end, ok := findDA1(remaining); ok {
 		result.Detected = true
+		remaining = cutRange(remaining, start, end)
 	}
-	if hasSyncSupport(total) {
-		result.SynchronizedOutput = true
+	if start, end, ps, ok := findDECRQM2026(remaining); ok {
+		// Ps 1/2 (currently set/reset, togglable) and 3 (permanently
+		// set — always on, can't be turned off, but still supported)
+		// all mean the terminal recognizes the mode. Only 0 (not
+		// recognized) and 4 (permanently reset — never supported) mean
+		// it doesn't.
+		if ps == 1 || ps == 2 || ps == 3 {
+			result.SynchronizedOutput = true
+		}
+		remaining = cutRange(remaining, start, end)
 	}
-	return result
+	if len(remaining) == 0 {
+		return result, nil
+	}
+	return result, remaining
 }
 
-// hasDA1 reports whether b contains a DA1 reply: CSI ? ... c.
-func hasDA1(b []byte) bool {
+// StripLateReply removes any DA1/DECRQM reply from b and returns the
+// result. Probe can only rescue reply bytes it reads *within its own
+// timeout window* (see its leftover return); a reply that arrives
+// after Probe has already given up — a slow terminal, or one that
+// batches escape-sequence replies — is invisible to Probe entirely, and
+// would otherwise be read (and, in a program that forwards raw input to
+// a child, forwarded) by whatever reads the terminal next, looking
+// exactly like typed input.
+//
+// A caller that persistently owns stdin after calling Probe (a pty
+// multiplexer, an input decoder loop) should pass every read through
+// StripLateReply for a short grace period after startup (a couple of
+// seconds is plenty — by then the terminal has either replied or isn't
+// going to). The patterns matched are specific enough (they must start
+// with ESC, then "[?", then digits/semicolons in an exact shape) that a
+// human typing or pasting real input matching one by coincidence is
+// not a realistic concern.
+func StripLateReply(b []byte) []byte {
+	for {
+		matched := false
+		if start, end, ok := findDA1(b); ok {
+			b = cutRange(b, start, end)
+			matched = true
+		}
+		if start, end, _, ok := findDECRQM2026(b); ok {
+			b = cutRange(b, start, end)
+			matched = true
+		}
+		if !matched {
+			return b
+		}
+	}
+}
+
+// cutRange returns b with the byte range [start,end) removed.
+func cutRange(b []byte, start, end int) []byte {
+	out := make([]byte, 0, len(b)-(end-start))
+	out = append(out, b[:start]...)
+	return append(out, b[end:]...)
+}
+
+// findDA1 reports the byte range of the first DA1 reply in b: CSI ? ... c.
+func findDA1(b []byte) (start, end int, ok bool) {
 	i := indexCSI(b, 0)
 	for i >= 0 {
-		end := i + 2
-		for end < len(b) && b[end] != 'c' && (b[end] == '?' || b[end] == ';' || (b[end] >= '0' && b[end] <= '9')) {
-			end++
+		e := i + 2
+		for e < len(b) && (b[e] == '?' || b[e] == ';' || (b[e] >= '0' && b[e] <= '9')) {
+			e++
 		}
-		if end < len(b) && b[end] == 'c' {
-			return true
+		if e < len(b) && b[e] == 'c' {
+			return i, e + 1, true
 		}
 		i = indexCSI(b, i+1)
 	}
-	return false
+	return 0, 0, false
 }
 
-// hasSyncSupport reports whether b contains a DECRQM reply for mode
-// 2026 indicating support: CSI ? 2026 ; Ps $ y, with Ps == 1 or 2.
-func hasSyncSupport(b []byte) bool {
-	s := string(b)
+// findDECRQM2026 reports the byte range of any DECRQM reply for mode
+// 2026 — CSI ? 2026 ; Ps $ y — and its Ps value, regardless of what Ps
+// says. This is deliberately more permissive than "does Ps indicate
+// support": Probe uses the Ps value to decide SynchronizedOutput, but
+// both Probe and StripLateReply need to recognize (and remove) the
+// reply from the stream regardless of its answer — a reply saying
+// "not supported" (Ps 0, 3, or 4) is still our own query's reply, and
+// leaving it unmatched here means leaving it unremoved, which is
+// exactly the bug this exists to avoid.
+func findDECRQM2026(b []byte) (start, end, ps int, ok bool) {
 	const prefix = "\x1b[?2026;"
-	_, rest, ok := strings.Cut(s, prefix)
-	if !ok {
-		return false
+	i := bytes.Index(b, []byte(prefix))
+	if i < 0 {
+		return 0, 0, 0, false
 	}
-	psStr, _, ok := strings.Cut(rest, "$y")
-	if !ok {
-		return false
+	rest := b[i+len(prefix):]
+	j := bytes.Index(rest, []byte("$y"))
+	if j < 0 {
+		return 0, 0, 0, false
 	}
-	ps, err := strconv.Atoi(psStr)
-	return err == nil && (ps == 1 || ps == 2)
+	psVal, err := strconv.Atoi(string(rest[:j]))
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return i, i + len(prefix) + j + 2, psVal, true
 }
 
 // indexCSI returns the index of the next "\x1b[" in b at or after from,

@@ -30,11 +30,17 @@ const (
 
 // Style is a cell's full set of rendering attributes. The zero Style is
 // a well-defined, useful default: default foreground on default
-// background, no underline, no attributes.
+// background, no underline, no attributes, no hyperlink.
 type Style struct {
 	Fg             Color
 	Bg             Color
 	UnderlineColor Color // meaningful only when Underline != UnderlineNone; DefaultColor() means "same as Fg"
 	Underline      UnderlineStyle
 	Attr           Attr
+
+	// Hyperlink is the URI of an OSC-8 hyperlink the cell is part of,
+	// or "" for none. Added for package vt (M4), which captures OSC 8
+	// as exactly this — cell-level metadata — so a Terminal widget can
+	// later make the text clickable; see docs/DESIGN.md §7.
+	Hyperlink string
 }

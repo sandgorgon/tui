@@ -399,3 +399,34 @@ func TestWideRuneOccupiesTwoCells(t *testing.T) {
 		t.Errorf("cell(3,0) = %+v, want 'b'", c3)
 	}
 }
+
+func TestResizePreservesTopLeftContent(t *testing.T) {
+	s := newTestScreen(5, 3, "abcde\r\nfghij\r\nklmno")
+	s.Resize(3, 2) // shrink: only the top-left 3x2 region should survive
+	if got, want := dump(s), rows(3, "abc", "fgh"); got != want {
+		t.Errorf("dump after shrink = %q, want %q", got, want)
+	}
+	if cols, rows := s.Size(); cols != 3 || rows != 2 {
+		t.Errorf("Size() = (%d,%d), want (3,2)", cols, rows)
+	}
+}
+
+func TestResizeGrowClampsScrollRegionAndCursor(t *testing.T) {
+	s := newTestScreen(5, 5, "\x1b[2;4r\x1b[5;5H") // scroll region rows 2-4; cursor at bottom-right
+	s.Resize(3, 3)                                 // now smaller than the old cursor position and scroll region
+	if x, y, _ := s.Cursor(); x != 2 || y != 2 {
+		t.Errorf("cursor after shrink = (%d,%d), want clamped to (2,2)", x, y)
+	}
+	if s.scrollBottom != 2 {
+		t.Errorf("scrollBottom after shrink = %d, want clamped to 2", s.scrollBottom)
+	}
+}
+
+func TestResizeNoOpWhenSameSize(t *testing.T) {
+	s := newTestScreen(4, 2, "abcd\r\nefgh")
+	before := dump(s)
+	s.Resize(4, 2)
+	if got := dump(s); got != before {
+		t.Errorf("dump after no-op resize = %q, want unchanged %q", got, before)
+	}
+}

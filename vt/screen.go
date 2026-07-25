@@ -109,6 +109,43 @@ func (s *Screen) Title() string { return s.title }
 // Size returns the screen's dimensions.
 func (s *Screen) Size() (cols, rows int) { return s.cols, s.rows }
 
+// Resize changes the screen's dimensions, preserving as much of the
+// existing primary and alternate content as fits, anchored at the
+// top-left — matching standard terminal resize behavior of not trying
+// to reflow text. The scroll region is clamped to the new size and tab
+// stops reset to the default every-8-columns spacing; scrollback is
+// untouched.
+func (s *Screen) Resize(cols, rows int) {
+	if cols == s.cols && rows == s.rows {
+		return
+	}
+	s.primary = resizeBuffer(s.primary, cols, rows)
+	s.alt = resizeBuffer(s.alt, cols, rows)
+	s.cols, s.rows = cols, rows
+
+	s.resetTabStops()
+
+	if s.scrollBottom >= rows {
+		s.scrollBottom = rows - 1
+	}
+	if s.scrollTop > s.scrollBottom {
+		s.scrollTop = 0
+	}
+
+	s.clampCursor()
+}
+
+func resizeBuffer(old *cell.Buffer, cols, rows int) *cell.Buffer {
+	nb := cell.NewBuffer(cols, rows)
+	w, h := min(old.Width, cols), min(old.Height, rows)
+	for y := range h {
+		for x := range w {
+			nb.Set(x, y, old.At(x, y))
+		}
+	}
+	return nb
+}
+
 // Scrollback returns the number of primary-screen lines available in
 // scrollback, and the i'th such line (0 = oldest), for a caller that
 // wants to render scrollback above the live screen.

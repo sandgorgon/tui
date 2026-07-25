@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test (race)
+        run: go test ./... -race
+
+      # Fuzz targets land with the input decoder (M1) and the vt parser
+      # (M4). Once they exist, add a short bounded fuzz run per target here,
+      # e.g.:
+      #   go test ./input/... -run=^$ -fuzz=FuzzDecode -fuzztime=20s
+      #   go test ./vt/...    -run=^$ -fuzz=FuzzParse  -fuzztime=20s
+
+  no-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: verify go.mod has no third-party requires
+        run: |
+          if grep -q '^require' go.mod 2>/dev/null; then
+            echo "go.mod has a require block — this module must stay dependency-free"
+            cat go.mod
+            exit 1
+          fi
+          echo "go.mod is dependency-free"

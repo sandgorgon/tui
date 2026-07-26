@@ -32,6 +32,48 @@ examples gallery). No stable API yet — see
   of that, verification from someone with a Mac is genuinely welcome —
   see `pty/pty_darwin.go` and `term/term_darwin.go`.
 
+## Quick start
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/sandgorgon/tui/cell"
+	"github.com/sandgorgon/tui/input"
+	"github.com/sandgorgon/tui/tui"
+)
+
+type model struct{}
+
+func (m model) Init() tui.Cmd { return nil }
+
+func (m model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
+	if ke, ok := msg.(input.KeyEvent); ok && ke.Rune == 'q' {
+		return m, tui.Quit()
+	}
+	return m, nil
+}
+
+func (m model) View() tui.Node {
+	return tui.Text("hello, tui — press q to quit", cell.Style{})
+}
+
+func main() {
+	if err := tui.NewApp(model{}, 80, 24).Run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+```
+
+`Run` puts the terminal into raw mode and drives the app until `Update`
+returns a `Cmd` that yields `tui.Quit()`. See `examples/todo` for a
+complete Model with focus traversal and a retained `List` widget, and
+`examples/gallery` for the full widget catalog exercised in one app.
+
 ## Design
 
 The full architecture — layering, the component model, the PTY and VT

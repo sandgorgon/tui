@@ -24,13 +24,13 @@ examples gallery). No stable API yet — see
   multiplexer or an embedded shell panel.
 - Linux + macOS for v1 (Windows/ConPTY is a deferred, later phase).
   **macOS status:** implemented against Darwin's documented termios/pty
-  ioctls and cross-compiles cleanly, but has never been run on real
-  Apple hardware — this project has only ever been developed on Linux.
-  CI (`.github/workflows/ci.yml`) already runs the full suite on
-  `macos-latest`, so pushing to a repo with Actions enabled gets it
-  exercised on real (GitHub-hosted) Mac hardware automatically; short
-  of that, verification from someone with a Mac is genuinely welcome —
-  see `pty/pty_darwin.go` and `term/term_darwin.go`.
+  ioctls; this project was developed entirely on Linux, but CI
+  (`.github/workflows/ci.yml`) runs the full suite — build, vet,
+  `-race`, fuzz smoke — on `macos-latest` on every push, so it's now
+  verified passing on real (GitHub-hosted) Mac hardware. It hasn't been
+  exercised interactively on a Mac (an actual terminal session driving
+  a real shell/vim/htop through it) — see `pty/pty_darwin.go` and
+  `term/term_darwin.go` if you hit anything Mac-specific.
 
 ## Quick start
 

@@ -82,6 +82,22 @@ func (p *Painter) SetCell(x, y int, r rune, style Style) {
 	}
 }
 
+// SetRawCell writes c verbatim at (x,y) (local coordinates) — like
+// Buffer.Set, with no wide-rune width computation — doing nothing if
+// (x,y) is outside the clip. It's for compositing an already-resolved
+// region of another Buffer into place (continuation cells and all),
+// e.g. widget.Viewport blitting a scrolled window of its content
+// buffer, or a future Terminal widget blitting a vt.Screen's buffer
+// (see examples/multiplexer/compositor.go, which does the same thing
+// by hand against a raw Buffer since it predates Painter having this).
+// Most callers drawing new content want SetCell instead.
+func (p *Painter) SetRawCell(x, y int, c Cell) {
+	if x < 0 || y < 0 || x >= p.clip.W || y >= p.clip.H {
+		return
+	}
+	p.buf.Set(p.clip.X+x, p.clip.Y+y, c)
+}
+
 // Text draws s on a single line starting at (x,y), with no wrapping
 // (see the future Paragraph widget for that), clipped to the Painter's
 // bounds. It returns the number of columns advanced, which may be less

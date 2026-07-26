@@ -117,6 +117,37 @@ func TestPainterText(t *testing.T) {
 	}
 }
 
+func TestPainterSetRawCellWritesVerbatim(t *testing.T) {
+	b := NewBuffer(3, 1)
+	p := NewPainter(b)
+
+	// A continuation cell (Rune 0, Width 0) written via SetCell would
+	// be reinterpreted (wcwidth.RuneWidth(0) doesn't mean "skip me");
+	// SetRawCell must store it exactly as given.
+	cont := Cell{Style: Style{Attr: AttrBold}, Width: 0}
+	p.SetRawCell(1, 0, cont)
+
+	if got := b.At(1, 0); got != cont {
+		t.Errorf("At(1,0) = %+v, want %+v (verbatim)", got, cont)
+	}
+}
+
+func TestPainterSetRawCellClipsAndTranslates(t *testing.T) {
+	b := NewBuffer(5, 5)
+	child := NewPainter(b).Clip(Rect{X: 2, Y: 2, W: 2, H: 2})
+
+	c := Cell{Rune: 'z', Width: 1}
+	child.SetRawCell(0, 0, c)
+	if got := b.At(2, 2); got != c {
+		t.Errorf("At(2,2) = %+v, want %+v (child (0,0) maps to absolute (2,2))", got, c)
+	}
+
+	child.SetRawCell(5, 5, c) // outside the clip entirely
+	if got := b.At(4, 4); got == c {
+		t.Error("out-of-clip SetRawCell should not have written anywhere")
+	}
+}
+
 func TestPainterFillClipsToPainterBounds(t *testing.T) {
 	b := NewBuffer(4, 4)
 	p := NewPainter(b).Clip(Rect{X: 1, Y: 1, W: 2, H: 2})

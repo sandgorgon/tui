@@ -130,6 +130,16 @@ func (a *App) HandleInput(e input.Event) []Cmd {
 		if cmd := a.focusables[a.focusIdx].widget.HandleEvent(e); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		// HandleEvent can mutate the widget's own retained state
+		// directly (e.g. widget.Viewport's scroll offset) rather than
+		// only ever going through a Msg/Update round trip the way
+		// List's cursor does — Dispatch's render() above ran before
+		// that mutation happened, so without this second render() the
+		// change wouldn't be visible until some later, unrelated
+		// render. Cheap even when nothing changed: render() re-walks
+		// the same Node tree render.Renderer will only emit bytes for
+		// cells that actually differ from the terminal's last frame.
+		a.render()
 	}
 	return cmds
 }

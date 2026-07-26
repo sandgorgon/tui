@@ -38,8 +38,10 @@ type model struct {
 	listSelected []bool
 	listItems    []string
 
-	treeCursor int
-	treeRows   []widget.TreeRow
+	treeCursor    int
+	treeNodes     []*treeNode
+	treeNodeIndex []*treeNode // parallel to treeRows: row i's source node
+	treeRows      []widget.TreeRow
 
 	tableCols     []widget.Column
 	tableRows     [][]string
@@ -68,6 +70,42 @@ type model struct {
 	shellCmd func() *exec.Cmd
 }
 
+// treeNode is the gallery's hierarchical business state for the tree
+// demo (docs/DESIGN.md §3.1: expanded flags and the tree's shape are
+// business state the app owns, not widget.Tree). rebuildTreeRows
+// flattens it into the []widget.TreeRow the widget actually renders,
+// skipping the children of any node that isn't expanded.
+type treeNode struct {
+	label    string
+	expanded bool
+	children []*treeNode
+}
+
+// rebuildTreeRows re-flattens m.treeNodes into m.treeRows, and must be
+// called after any change to a node's expanded flag — otherwise a
+// collapsed node's children would keep rendering, since widget.Tree
+// only draws whatever rows it's given.
+func (m *model) rebuildTreeRows() {
+	m.treeRows = m.treeRows[:0]
+	m.treeNodeIndex = m.treeNodeIndex[:0]
+	flattenTree(m.treeNodes, 0, &m.treeRows, &m.treeNodeIndex)
+}
+
+func flattenTree(nodes []*treeNode, depth int, rows *[]widget.TreeRow, index *[]*treeNode) {
+	for _, n := range nodes {
+		*rows = append(*rows, widget.TreeRow{
+			Label:       n.label,
+			Depth:       depth,
+			HasChildren: len(n.children) > 0,
+			Expanded:    n.expanded,
+		})
+		*index = append(*index, n)
+		if n.expanded {
+			flattenTree(n.children, depth+1, rows, index)
+		}
+	}
+}
+
 func newModel() *model {
 	m := &model{
 		listItems:       []string{"apple", "banana", "cherry", "date", "elderberry"},
@@ -81,14 +119,21 @@ func newModel() *model {
 	}
 	m.listSelected[0] = true
 
-	m.treeRows = []widget.TreeRow{
-		{Label: "cmd", Depth: 0, HasChildren: true, Expanded: true},
-		{Label: "gallery", Depth: 1, HasChildren: false},
-		{Label: "widget", Depth: 0, HasChildren: true, Expanded: true},
-		{Label: "table.go", Depth: 1, HasChildren: false},
-		{Label: "tree.go", Depth: 1, HasChildren: false},
-		{Label: "vt", Depth: 0, HasChildren: true, Expanded: false},
+	m.treeNodes = []*treeNode{
+		{label: "cmd", expanded: true, children: []*treeNode{
+			{label: "gallery"},
+		}},
+		{label: "widget", expanded: true, children: []*treeNode{
+			{label: "table.go"},
+			{label: "tree.go"},
+		}},
+		{label: "vt", children: []*treeNode{
+			{label: "parser.go"},
+			{label: "screen.go"},
+			{label: "scrollback.go"},
+		}},
 	}
+	m.rebuildTreeRows()
 
 	m.tableCols = []widget.Column{
 		{Title: "Package", Width: 12},
@@ -123,7 +168,8 @@ func (m *model) reset() {
 	fresh := newModel()
 	m.progress = 0
 	m.listCursor, m.listSelected = 0, fresh.listSelected
-	m.treeCursor, m.treeRows = 0, fresh.treeRows
+	m.treeCursor, m.treeNodes = 0, fresh.treeNodes
+	m.rebuildTreeRows()
 	m.tableCursor, m.tableSortCol, m.tableSortDesc = 0, 0, false
 	m.tableRows = fresh.tableRows
 	m.radioSelected = 0

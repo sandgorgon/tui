@@ -118,8 +118,12 @@ func (m *model) applyList(v listMsg) {
 
 func (m *model) applyTree(v treeMsg) {
 	if v.toggle {
-		if m.treeCursor < len(m.treeRows) && m.treeRows[m.treeCursor].HasChildren {
-			m.treeRows[m.treeCursor].Expanded = !m.treeRows[m.treeCursor].Expanded
+		if m.treeCursor < len(m.treeNodeIndex) {
+			if n := m.treeNodeIndex[m.treeCursor]; len(n.children) > 0 {
+				n.expanded = !n.expanded
+				m.rebuildTreeRows()
+				m.treeCursor = clampIndex(m.treeCursor, len(m.treeRows))
+			}
 		}
 		return
 	}

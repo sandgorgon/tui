@@ -300,7 +300,7 @@ rather than being a late add-on.
 | M9 | style/theme system |
 | M10 | Widgets batch 1 — structural/text: Box, Paragraph, List, Viewport, Tabs, StatusBar, ProgressBar, Spinner — golden coverage via the M5 harness |
 | M11 | Widgets batch 2 — input/data, plus formalizing M6's prototype as the proper L5 `Terminal` widget: TextInput, TextArea, Table, Tree, Select, Checkbox/Radio, Modal, CommandPalette |
-| M12 | Hardening: fuzz corpus expansion, full golden-file coverage across all widgets, benchmarks, docs, examples gallery, ~~mouse hit-testing~~ (done — see §9), ~~OSC 52 clipboard copy~~ (done — see §9) |
+| M12 | Hardening: ~~fuzz corpus expansion~~ (done — see §9), ~~full golden-file coverage across all widgets~~ (done — see §9), ~~benchmarks~~ (done — see §9), docs, examples gallery, ~~mouse hit-testing~~ (done — see §9), ~~OSC 52 clipboard copy~~ (done — see §9) |
 | M13 (explicitly deferred, not in v1) | Windows/ConPTY backend, image protocols, accessibility mode, terminfo db compat |
 
 ---
@@ -390,6 +390,71 @@ rather than being a late add-on.
   hardcodes a copy keybinding itself — same as every other
   business-decision key (Enter/Space/etc.), which key copies what is
   entirely up to the application's own `onEvent` handling.
+
+  **Fuzz corpus — done (M12).** `go test -fuzz` targets added for the two
+  byte-stream state machines §10 always intended to have them:
+  `vt.FuzzParser` (feeds arbitrary bytes through `Parser` into a real
+  `Screen`, not just the bare `Handler` recorder, so the corpus exercises
+  parser + screen semantics together) and `input.FuzzDecode` (feeds
+  arbitrary bytes through `Decoder.Decode` over a `net.Pipe`, escape
+  timeout cut to 1ms and the decode loop capped at 10k events per input
+  so a decoder bug that never advances can't hang the fuzzer). Both
+  seeded from the existing hand-written conformance/table-driven
+  fixtures. A 30s live-fuzzing pass on each found one real bug on the
+  very first seed (the empty-input case): `Decoder.fill`/
+  `readByteTimeout` treated a `Read` returning `(0, nil)` — a documented,
+  legal `io.Reader` outcome (`net.Pipe` does exactly this for a
+  zero-length `Write`) — as EOF/timeout without refilling, so the next
+  `readByte` indexed into a stale/empty buffer and panicked. Both loops
+  now retry on `(0, nil)` instead of returning, per the `io.Reader`
+  contract. No crasher files exist under `testdata/fuzz/` — none of the
+  30s runs (either target) found anything beyond that one seed-corpus
+  bug, which is fixed in source rather than needing a regression corpus
+  entry.
+
+  **Golden-file coverage across all widgets — done (M12).**
+  `internal/testutil.Golden(t, name, buf)` compares `buf.String()`'s
+  text-grid dump (see `cell.Buffer.String`'s doc comment, which already
+  named this exact use case back at M2) against a fixture under
+  `testdata/golden/<name>.golden`, with a package-registered `-update`
+  flag (`go test -update ./...`) to write/refresh fixtures — this is
+  deliberately a different check than the render↔vt round trip: round
+  trip proves whatever was painted survives re-encoding, golden files
+  protect the specific *content/shape* of what was painted in the first
+  place, which a round trip can't catch (a widget silently painting the
+  wrong thing still round-trips cleanly, as long as it's well-formed).
+  `widget/golden_test.go` covers all 17 `widget.Xxx` constructors, plus
+  `Modal`/`CommandPalette` (need a real `tui.App` for the
+  `OverlayPainter` path) and `Terminal` (real subprocess, via the same
+  `waitFor`-for-stable-output pattern `terminal_test.go` already
+  established). Two diffs looked like bugs on first read of the
+  generated fixtures and turned out not to be, worth knowing before
+  re-generating these: `CommandPalette`'s fixture shows 4 stray
+  characters of the host app's background text (`back`) bleeding into
+  the palette's own top-left margin — correct, since `tui.Focusable`
+  auto-draws a border around whatever's focused (here, the background
+  pane) and `centeredOverlay`'s box is narrower than the frame, so
+  background content between the two simply isn't covered by either;
+  and the palette's placeholder text (`"type a command"`) shows as
+  `"ype a command"` — also correct, `paintQueryLine` deliberately
+  overwrites column 0 with a blank reverse-video cell to draw the
+  empty-input cursor block, which necessarily destroys whatever
+  placeholder character was there.
+
+  **Benchmarks — done (M12).** `go test -bench` coverage for the paths
+  most likely to matter for interactive responsiveness: `render`'s
+  diff/SGR writer (`BenchmarkRenderFullFrame` vs.
+  `BenchmarkRenderNoOpDiff` vs. `BenchmarkRenderSmallDiff`, split out
+  specifically so a future regression toward full-frame cost on an
+  unchanged or lightly-changed frame is visible instead of hiding inside
+  one aggregate number), `vt.Parser.Feed` under a realistic mixed CSI/
+  SGR/OSC byte stream (not just plain text, since dispatch — not
+  `Print` — is where a slow parser would show up), `layout`'s solver
+  under a nested mixed-constraint split, and `tui.Tree.Reconcile`/
+  `Paint` cold (first mount) vs. warm (steady-state re-reconcile,
+  reusing retained widgets) — plus a `widget`-package composite frame
+  covering the M10 widget catalog together, the same frame
+  `roundtrip_test.go` already used for round-trip coverage.
 
 ---
 

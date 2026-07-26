@@ -8,7 +8,10 @@ dependencies**.
 go get github.com/sandgorgon/tui
 ```
 
-Status: early development (M0 — repo scaffold). No stable API yet.
+Status: pre-1.0, M0-M11 shipped (full widget catalog, PTY subsystem,
+embedded terminal emulator, theming), M12 (hardening: fuzzing, golden
+tests, benchmarks, docs) in progress. No stable API yet — see
+[`docs/DESIGN.md`](docs/DESIGN.md) §8 for the milestone table.
 
 ## What this is
 

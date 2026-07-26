@@ -323,6 +323,21 @@ rather than being a late add-on.
   event loop; needs an explicit bounded-channel + coalescing policy (e.g.
   for rapid resize events) so a slow consumer can't be starved or the
   channel unbounded-grow.
+- **macOS is unverified on real hardware (open, as of M12).** `pty/
+  pty_darwin.go` and `term/term_darwin.go`'s ioctl constants and struct
+  layouts (`TIOCPTYGRANT`/`TIOCPTYUNLK`/`TIOCPTYGNAME`, termios field
+  positions, `tcflag_t` width — see §6, §3.4) were transcribed from
+  `golang.org/x/sys/unix`'s canonical source at M1/M3, not developed or
+  tested against a real Mac — this project has been developed entirely
+  on Linux. It cross-compiles cleanly (`GOOS=darwin go build ./...`),
+  which is the extent of what's been verified. CI already runs the full
+  suite (`go vet`/`build`/`test -race`) on `macos-latest` per the M0
+  matrix, so once this repo is pushed somewhere with Actions enabled,
+  every push gets exercised on real (GitHub-hosted) Apple hardware for
+  free — that's the intended path to closing this gap, not a rewrite.
+  Short of that, verification from a contributor with real Mac access
+  is the other option. Do not mark macOS support as trustworthy until
+  one of those two things has actually happened.
 - **Mouse hit-testing — done (M12, first pass).** App now tracks every
   focusable widget's absolute on-screen `Rect` as a byproduct of the
   existing paint walk (`collectRects`, mirroring `paint`'s own

@@ -28,11 +28,10 @@ jobs:
       - name: go test (race)
         run: go test ./... -race
 
-      # Fuzz targets land with the input decoder (M1) and the vt parser
-      # (M4). Once they exist, add a short bounded fuzz run per target here,
-      # e.g.:
-      #   go test ./input/... -run=^$ -fuzz=FuzzDecode -fuzztime=20s
-      #   go test ./vt/...    -run=^$ -fuzz=FuzzParse  -fuzztime=20s
+      - name: fuzz (short, bounded)
+        run: |
+          go test ./input/... -run=^$ -fuzz=FuzzDecode -fuzztime=20s
+          go test ./vt/...    -run=^$ -fuzz=FuzzParser  -fuzztime=20s
 
   no-deps:
     runs-on: ubuntu-latest

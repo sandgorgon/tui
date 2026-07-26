@@ -23,6 +23,14 @@ examples gallery). No stable API yet — see
   inside a pane — the building block for things like a terminal
   multiplexer or an embedded shell panel.
 - Linux + macOS for v1 (Windows/ConPTY is a deferred, later phase).
+  **macOS status:** implemented against Darwin's documented termios/pty
+  ioctls and cross-compiles cleanly, but has never been run on real
+  Apple hardware — this project has only ever been developed on Linux.
+  CI (`.github/workflows/ci.yml`) already runs the full suite on
+  `macos-latest`, so pushing to a repo with Actions enabled gets it
+  exercised on real (GitHub-hosted) Mac hardware automatically; short
+  of that, verification from someone with a Mac is genuinely welcome —
+  see `pty/pty_darwin.go` and `term/term_darwin.go`.
 
 ## Design
 

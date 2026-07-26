@@ -472,21 +472,26 @@ func indexByte(b []byte, c byte) int {
 	return -1
 }
 
+// fill refills d.buf, looping on the io.Reader-documented case of a
+// Read returning (0, nil) — callers must treat that as "nothing
+// happened, try again", not as EOF (net.Pipe, for example, does this
+// for a zero-length Write on the other end).
 func (d *Decoder) fill() error {
 	if d.pos < len(d.buf) {
 		return nil
 	}
 	tmp := make([]byte, 256)
-	n, err := d.r.Read(tmp)
-	if n > 0 {
-		d.buf = tmp[:n]
-		d.pos = 0
-		return nil
+	for {
+		n, err := d.r.Read(tmp)
+		if n > 0 {
+			d.buf = tmp[:n]
+			d.pos = 0
+			return nil
+		}
+		if err != nil {
+			return err
+		}
 	}
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (d *Decoder) readByte() (byte, error) {
@@ -512,19 +517,22 @@ func (d *Decoder) readByteTimeout(timeout time.Duration) (b byte, ok bool, err e
 	defer d.r.SetReadDeadline(time.Time{})
 
 	tmp := make([]byte, 256)
-	n, err := d.r.Read(tmp)
-	if n > 0 {
-		d.buf = tmp[:n]
-		d.pos = 1
-		return tmp[0], true, nil
-	}
-	if err != nil {
-		if isTimeout(err) {
-			return 0, false, nil
+	for {
+		n, err := d.r.Read(tmp)
+		if n > 0 {
+			d.buf = tmp[:n]
+			d.pos = 1
+			return tmp[0], true, nil
 		}
-		return 0, false, err
+		if err != nil {
+			if isTimeout(err) {
+				return 0, false, nil
+			}
+			return 0, false, err
+		}
+		// (0, nil): nothing happened, retry — the deadline set above
+		// still applies, so this can't spin past it.
 	}
-	return 0, false, nil
 }
 
 func isTimeout(err error) bool {

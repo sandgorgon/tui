@@ -219,6 +219,88 @@ func TestTableClickPastLastRowProducesNoEvent(t *testing.T) {
 	}
 }
 
+func TestTableDragResizesColumnBoundary(t *testing.T) {
+	rows := [][]string{{"a", "1"}}
+	m := &widgetHostModel{node: Table(testColumns(), rows, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, nil)}
+	app := tui.NewApp(m, 20, 2)
+
+	// The gap after "Name" (width 6) is at X=6. Press there, then drag
+	// 3 cells right, widening "Name" by 3.
+	app.HandleInput(input.MouseEvent{X: 6, Y: 0, Button: input.MouseLeft})
+	app.HandleInput(input.MouseEvent{X: 9, Y: 0, Button: input.MouseLeft, Drag: true})
+
+	got := strings.Split(app.Buffer().String(), "\n")[0]
+	if !strings.HasPrefix(got, "Name      Age") { // 6+3=9-wide "Name", plus its 1-cell gap
+		t.Errorf("header after drag = %q, want \"Name\" widened by 3 columns", got)
+	}
+}
+
+func TestTableDragResizeClampsToMinimumWidth(t *testing.T) {
+	rows := [][]string{{"a", "1"}}
+	m := &widgetHostModel{node: Table(testColumns(), rows, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, nil)}
+	app := tui.NewApp(m, 20, 2)
+
+	app.HandleInput(input.MouseEvent{X: 6, Y: 0, Button: input.MouseLeft})
+	app.HandleInput(input.MouseEvent{X: -10, Y: 0, Button: input.MouseLeft, Drag: true})
+
+	got := strings.Split(app.Buffer().String(), "\n")[0]
+	if !strings.HasPrefix(got, "Nam ") { // clamped to tableMinColumnWidth (3)
+		t.Errorf("header after drag past minimum = %q, want \"Name\" clamped to width 3", got)
+	}
+}
+
+func TestTableDragResizeEndsOnRelease(t *testing.T) {
+	rows := [][]string{{"a", "1"}}
+	m := &widgetHostModel{node: Table(testColumns(), rows, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, nil)}
+	app := tui.NewApp(m, 20, 2)
+
+	app.HandleInput(input.MouseEvent{X: 6, Y: 0, Button: input.MouseLeft})
+	app.HandleInput(input.MouseEvent{X: 9, Y: 0, Button: input.MouseLeft, Drag: true})
+	app.HandleInput(input.MouseEvent{X: 9, Y: 0, Button: input.MouseRelease})
+	// A further move-with-button-down event after release must not
+	// resume the old drag.
+	app.HandleInput(input.MouseEvent{X: 15, Y: 0, Button: input.MouseLeft, Drag: true})
+
+	got := strings.Split(app.Buffer().String(), "\n")[0]
+	if !strings.HasPrefix(got, "Name      Age") {
+		t.Errorf("header after release = %q, want the width from before release to stick, not keep growing", got)
+	}
+}
+
+func TestTableDragResizeAbandonedWhenRowChangesMidDrag(t *testing.T) {
+	rows := [][]string{{"a", "1"}, {"b", "2"}}
+	m := &widgetHostModel{node: Table(testColumns(), rows, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, nil)}
+	app := tui.NewApp(m, 20, 3)
+
+	app.HandleInput(input.MouseEvent{X: 6, Y: 0, Button: input.MouseLeft})
+	// A continuation event landing on a different row — e.g. because
+	// the drag left Table's tracked bounds and App delivered it with
+	// raw, untranslated coordinates (see handleColumnDrag's doc
+	// comment) — must not be treated as part of the same drag.
+	app.HandleInput(input.MouseEvent{X: 9, Y: 1, Button: input.MouseLeft, Drag: true})
+
+	got := strings.Split(app.Buffer().String(), "\n")[0]
+	if !strings.HasPrefix(got, "Name   Age") { // unchanged width (6-wide "Name" + its gap)
+		t.Errorf("header = %q, want the drag abandoned (no width change) once the row changed", got)
+	}
+}
+
+func TestTableClickInColumnGapWithoutDragStillProducesNoEvent(t *testing.T) {
+	called := false
+	node := Table(testColumns(), [][]string{{"a", "1"}}, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, func(e input.Event) tui.Msg {
+		called = true
+		return "x"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 20, 3)
+
+	app.HandleInput(input.MouseEvent{X: 6, Y: 0, Button: input.MouseLeft})
+	app.HandleInput(input.MouseEvent{X: 6, Y: 0, Button: input.MouseRelease})
+	if called {
+		t.Error("a plain click (press+release, no drag) on the gap should still not forward to onEvent")
+	}
+}
+
 func TestTableRetainsColumnWidthsAcrossReconcile(t *testing.T) {
 	var tr tui.Tree
 	buf := cell.NewBuffer(20, 2)

@@ -70,6 +70,17 @@ type tableWidget struct {
 
 	scrollOffset int
 	focused      bool
+
+	// draggingCol/dragRow/dragLastX track an in-progress column
+	// boundary drag (see handleColumnDrag): draggingCol is -1 when
+	// nothing is being dragged, otherwise the index of the column whose
+	// right-edge boundary is being resized. dragRow is the local row
+	// the drag started on; a continuation event landing on a different
+	// row ends the drag defensively rather than risk mixing coordinate
+	// spaces (see handleColumnDrag's doc comment).
+	draggingCol int
+	dragRow     int
+	dragLastX   int
 }
 
 func (w *tableWidget) Reconcile(props any) bool {
@@ -82,6 +93,7 @@ func (w *tableWidget) Reconcile(props any) bool {
 		for i, c := range w.columns {
 			w.colWidths[i] = max(c.Width, tableMinColumnWidth)
 		}
+		w.draggingCol = -1
 	case len(w.colWidths) != len(w.columns):
 		// Column count changed since mount (a genuinely different
 		// table, not just new row data) — re-derive widths, keeping
@@ -95,6 +107,9 @@ func (w *tableWidget) Reconcile(props any) bool {
 			}
 		}
 		w.colWidths = widths
+		// The column being dragged (if any) may no longer exist, or may
+		// no longer mean what it did — safest to just abandon the drag.
+		w.draggingCol = -1
 	}
 	if w.cursorCol >= len(w.columns) {
 		w.cursorCol = max(len(w.columns)-1, 0)
@@ -184,6 +199,9 @@ func (w *tableWidget) HandleEvent(e input.Event) tui.Cmd {
 	}
 
 	if me, ok := e.(input.MouseEvent); ok {
+		if w.handleColumnDrag(me) {
+			return nil
+		}
 		col, ok := w.columnAt(me.X)
 		if !ok {
 			return nil // clicked a gap between columns
@@ -229,6 +247,70 @@ func (w *tableWidget) columnAt(x int) (col int, ok bool) {
 		pos += cw + 1 // 1-cell gap, see Paint
 	}
 	return 0, false
+}
+
+// boundaryAt reports whether x lands in the 1-cell gap immediately
+// after column col (see Paint's col += cw + 1) — the drag handle for
+// that column's right edge — or ok=false if x isn't in any such gap
+// (there's no boundary after the last column).
+func (w *tableWidget) boundaryAt(x int) (col int, ok bool) {
+	pos := 0
+	for i, cw := range w.colWidths {
+		gapX := pos + cw
+		if i < len(w.colWidths)-1 && x == gapX {
+			return i, true
+		}
+		pos = gapX + 1
+	}
+	return 0, false
+}
+
+// handleColumnDrag implements click-and-drag column resizing: a press
+// (Button set, Drag false) landing in the gap after a column (see
+// boundaryAt) starts dragging that column's width; subsequent Drag
+// events move colWidths[draggingCol] by the X delta since the last
+// event; any MouseRelease ends it. It reports whether it consumed me
+// (true) or me should fall through to normal column/row translation.
+//
+// A continuation event landing on a different row than the drag
+// started on ends the drag rather than applying its delta — this is
+// deliberately conservative: App.HandleInput only translates a
+// MouseEvent's coordinates to be local to Table when the event's
+// absolute position still falls inside Table's own tracked Rect (see
+// tui.App.hitTest); if a drag gesture moves the mouse outside that
+// Rect mid-drag, the event still gets delivered here (Table remains
+// focused) but with raw, untranslated absolute coordinates, which
+// would otherwise silently produce a garbage width jump when mixed
+// with the local dragLastX from the previous event. A legitimately
+// continued drag on the same row always reports the same local row
+// each time, so a changed row is a reliable (if imperfect — see
+// docs/DESIGN.md) signal that trust should end here.
+func (w *tableWidget) handleColumnDrag(me input.MouseEvent) bool {
+	if w.draggingCol >= 0 {
+		switch {
+		case me.Button == input.MouseRelease:
+			w.draggingCol = -1
+			return true
+		case !me.Drag || me.Y != w.dragRow:
+			w.draggingCol = -1
+			return false
+		default:
+			dx := me.X - w.dragLastX
+			w.colWidths[w.draggingCol] = max(w.colWidths[w.draggingCol]+dx, tableMinColumnWidth)
+			w.dragLastX = me.X
+			return true
+		}
+	}
+
+	if me.Button == input.MouseLeft && !me.Drag {
+		if col, ok := w.boundaryAt(me.X); ok {
+			w.draggingCol = col
+			w.dragRow = me.Y
+			w.dragLastX = me.X
+			return true
+		}
+	}
+	return false
 }
 
 // rowAt translates a Y coordinate (already known to be > 0, i.e. below

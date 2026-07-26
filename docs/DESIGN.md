@@ -383,11 +383,30 @@ rather than being a late add-on.
   (nil by default — an outside click is simply absorbed rather than
   misrouted, unless the app opts in to using it to close the dialog).
 
+  **Table column drag-to-resize — done (post-M12).** A press (`Button`
+  set, `Drag` false) landing in the 1-cell gap after a column (new
+  `boundaryAt`, alongside the existing `columnAt`) starts dragging that
+  column's width; subsequent `Drag` events move `colWidths[draggingCol]`
+  by the X delta since the last event; any `MouseRelease` ends it — new
+  `draggingCol`/`dragRow`/`dragLastX` state on `tableWidget`, handled by
+  a new `handleColumnDrag` checked first in `HandleEvent`'s `MouseEvent`
+  branch. Guards against the coordinate-space gotcha this item was
+  flagged with ahead of time: `App.HandleInput` only translates a
+  `MouseEvent` to be local to `Table` when the event's absolute position
+  still falls inside `Table`'s tracked `Rect` (`hitTest`); if a drag
+  gesture's mouse position leaves that `Rect` mid-drag, the event still
+  reaches `Table` (it's still focused) but with raw, untranslated
+  absolute coordinates, which would silently produce a garbage width
+  jump if mixed with the previous event's local `dragLastX`. Defended
+  against by remembering the local row the drag started on
+  (`dragRow`) and abandoning the drag (not applying that event's delta)
+  the moment a continuation event reports a different row — a
+  legitimately-continued drag on the same row always reports the same
+  local row each time, so a changed row is a reliable, if not perfect,
+  signal that trust should end. Keyboard `Shift+Left/Right` resizing is
+  unaffected (untouched code path).
+
   **Explicitly still out of scope, not silently dropped:**
-  - Drag-to-resize a `Table` column via mouse — keyboard `Shift+Left/
-    Right` already covers resizing; wiring an actual click-and-drag
-    gesture is new state (which boundary is being dragged, live-updating
-    during drag) beyond this pass's click-translation work.
   - Click-to-position-cursor and click/drag-to-select text in
     `TextInput`/`TextArea` — real extra complexity (coordinate math
     through the field's own horizontal/vertical scroll, plus new

@@ -127,7 +127,7 @@ func stringWidth(s string) int {
 
 func runeWidth(r rune) int {
 	w := wcwidth.RuneWidth(r)
-	if w < 0 {
+	if w <= 0 {
 		return 1
 	}
 	return w

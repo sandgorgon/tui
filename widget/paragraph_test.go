@@ -43,6 +43,28 @@ func TestWrapTextZeroWidth(t *testing.T) {
 	}
 }
 
+// TestStringWidthAgreesWithPainterTextOnZeroWidthRunes guards against a
+// real bug: wcwidth.RuneWidth returns 0 for a combining mark (genuinely
+// zero-width in a terminal that composes it onto the preceding base
+// character), but cell.Painter doesn't do combining-mark composition
+// (see Painter's own doc comment) — it draws every rune as its own
+// cell, so it treats a 0-width rune as occupying 1 column, same as any
+// other unhandled non-positive width. stringWidth/runeWidth used to
+// only special-case negative widths (control chars), leaving 0 as 0 —
+// silently disagreeing with what Painter.Text actually draws, which
+// under-reserved space for any caller measuring text before painting it
+// (e.g. widget.StatusBar's center/right segment layout).
+func TestStringWidthAgreesWithPainterTextOnZeroWidthRunes(t *testing.T) {
+	const combiningAcute = "é" // "e" + COMBINING ACUTE ACCENT (zero-width)
+
+	buf := cell.NewBuffer(10, 1)
+	painted := cell.NewPainter(buf).Text(0, 0, combiningAcute, cell.Style{})
+
+	if measured := stringWidth(combiningAcute); measured != painted {
+		t.Errorf("stringWidth(%q) = %d, but Painter.Text painted %d columns — they must agree", combiningAcute, measured, painted)
+	}
+}
+
 func TestParagraphPaint(t *testing.T) {
 	node := Paragraph("the quick brown fox jumps", cell.Style{})
 	buf := cell.NewBuffer(11, 3)

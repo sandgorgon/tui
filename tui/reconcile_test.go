@@ -92,6 +92,64 @@ func TestReconcileWidgetFactoryOnlyRunsOnMount(t *testing.T) {
 	}
 }
 
+// typedPropsA/typedPropsB and strictWidget stand in for two different
+// real widget.Xxx types (e.g. Paragraph and List), each of which
+// type-asserts its own concrete props type inside Reconcile — the
+// same thing every widget in package widget actually does (see e.g.
+// paragraphWidget.Reconcile's props.(paragraphProps)). fakeWidget
+// above accepts props as bare `any` and can't reproduce the bug this
+// test guards against.
+type typedPropsA struct{ v int }
+type typedPropsB struct{ v string }
+
+type strictWidget struct {
+	wantsA     bool // true: asserts typedPropsA; false: asserts typedPropsB
+	reconciles int
+}
+
+func (w *strictWidget) Reconcile(props any) bool {
+	if w.wantsA {
+		_ = props.(typedPropsA)
+	} else {
+		_ = props.(typedPropsB)
+	}
+	w.reconciles++
+	return true
+}
+func (w *strictWidget) Paint(p *cell.Painter)       {}
+func (w *strictWidget) HandleEvent(input.Event) Cmd { return nil }
+func (w *strictWidget) Focusable() bool             { return false }
+func (w *strictWidget) SetFocused(bool)             {}
+
+// TestReconcileWidgetTypeChangeMountsFreshInsteadOfPanicking guards
+// against a real crash found via examples/gallery (M12): an unkeyed
+// tree slot that renders a different widget.Xxx across frames (e.g.
+// Tabs-driven page content — page 0 a Paragraph, page 1 a List, both
+// at the same Box-child position) used to have reconcile reuse the
+// old frame's retained Widget and hand it the new frame's props,
+// panicking inside that widget's own type-asserting Reconcile. See
+// reconcile.go's propsType field and doc comment for the fix.
+func TestReconcileWidgetTypeChangeMountsFreshInsteadOfPanicking(t *testing.T) {
+	wA := &strictWidget{wantsA: true}
+	wB := &strictWidget{wantsA: false}
+
+	r := reconcile(nil, Component(nil, typedPropsA{v: 1}, func() Widget { return wA }))
+	if r.widget != Widget(wA) {
+		t.Fatal("initial mount didn't wire up widget A")
+	}
+
+	r2 := reconcile(r, Component(nil, typedPropsB{v: "x"}, func() Widget { return wB }))
+	if r2.widget != Widget(wB) {
+		t.Fatal("expected the retained node to remount to widget B instead of reusing widget A")
+	}
+	if wA.reconciles != 1 {
+		t.Errorf("widget A should not be Reconciled again once replaced, got %d calls", wA.reconciles)
+	}
+	if wB.reconciles != 1 {
+		t.Errorf("widget B should have been Reconciled once after mounting, got %d calls", wB.reconciles)
+	}
+}
+
 func TestReconcileChildrenMatchByKeyAcrossReorder(t *testing.T) {
 	wA, wB := &fakeWidget{}, &fakeWidget{}
 	build := func(order []string) Node {

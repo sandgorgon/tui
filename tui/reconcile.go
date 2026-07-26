@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"reflect"
+
 	"github.com/sandgorgon/tui/cell"
 	"github.com/sandgorgon/tui/layout"
 )
@@ -26,17 +28,38 @@ type retained struct {
 	children    []*retained
 
 	// kindWidget
-	widget Widget
+	widget    Widget
+	propsType reflect.Type // the concrete type of the props last handed to widget.Reconcile
 }
 
 // reconcile updates prev in place to match next, constructing a fresh
-// retained node (and, for a widget, a fresh Widget instance) only when
-// prev is nil or describes a different kind of node than next — i.e.
-// this tree slot didn't match anything from the previous frame. It
-// recurses into Box's children via reconcileChildren, which is where
-// position-vs-Key matching happens.
+// retained node (and, for a widget, a fresh Widget instance) whenever
+// this tree slot didn't match anything reusable from the previous
+// frame: prev is nil, next.kind differs, or (kindWidget only) next's
+// props are a different concrete type than what the retained Widget
+// was last reconciled with.
+//
+// That last check matters because kindWidget is one flat tag shared by
+// every widget.Xxx constructor in package widget — Paragraph, List,
+// Table, all of it. Without it, an unkeyed tree slot that renders a
+// different widget across frames (e.g. Tabs-driven page content: page
+// 0 is a Paragraph, page 1 is a List, both at the same position) would
+// have reconcile reuse the old frame's *paragraphWidget and hand it
+// the new frame's listProps, which panics inside that widget's own
+// Reconcile (a plain props.(paragraphProps) type assertion) rather
+// than failing safely. Each widget's props type is unique to that
+// widget (paragraphProps, listProps, ...), so comparing
+// reflect.TypeOf(props) is a cheap, reliable stand-in for "is this
+// still the same kind of widget" with no change needed to Widget or
+// Node itself. This is a real, easy-to-hit case (any conditionally-
+// rendered branch without an explicit Node.Key), not a hypothetical:
+// found via examples/gallery's Tabs-switched pages, M12.
 func reconcile(prev *retained, next Node) *retained {
-	if prev == nil || prev.kind != next.kind {
+	mismatch := prev == nil || prev.kind != next.kind
+	if !mismatch && next.kind == kindWidget && prev.propsType != reflect.TypeOf(next.props) {
+		mismatch = true
+	}
+	if mismatch {
 		if prev != nil {
 			disposeTree(prev)
 		}
@@ -62,6 +85,7 @@ func reconcile(prev *retained, next Node) *retained {
 		prev.children = reconcileChildren(prev.children, next.children)
 	case kindWidget:
 		prev.widget.Reconcile(next.props)
+		prev.propsType = reflect.TypeOf(next.props)
 	}
 	return prev
 }

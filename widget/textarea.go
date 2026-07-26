@@ -55,6 +55,10 @@ type textAreaWidget struct {
 
 	scrollRow, scrollCol int
 	focused              bool
+
+	// dragging is true between a MouseLeft press and its matching
+	// release — see handleMouse.
+	dragging bool
 }
 
 func (w *textAreaWidget) Reconcile(props any) bool {
@@ -146,22 +150,33 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 	}
 
 	base := w.opts.Theme.Text()
+	selStart, selEnd, hasSel := w.selectionRange()
 	for row := range innerH {
 		lineIdx := w.scrollRow + row
 		if lineIdx >= len(lines) {
 			break
 		}
 		ln := lines[lineIdx]
+		// A line entirely swept by the selection (selection starts at
+		// or before it and continues past its end into a later line)
+		// highlights its whole row width, padding included, so a
+		// multi-line selection reads as one continuous highlighted
+		// block rather than stopping dead at each line's actual text.
+		// A line the selection only starts or ends *within* only
+		// highlights its real characters — extending that highlight
+		// into the padding too would require re-deriving "how far
+		// into a later line does the selection reach" from this row's
+		// unrelated trailing columns, which don't correspond to real
+		// buffer positions the way idx does for idx < ln.end.
+		lineFullySelected := hasSel && selStart <= ln.start && selEnd > ln.end
 		for col := range innerW {
 			idx := ln.start + w.scrollCol + col
 			r := ' '
 			if idx < ln.end {
 				r = w.buf[idx]
 			}
-			style := base
-			if idx == w.cursor && w.focused {
-				style = cell.Style{Fg: base.Fg, Bg: base.Bg, Attr: base.Attr | cell.AttrReverse}
-			}
+			inSel := lineFullySelected || (hasSel && idx < ln.end && idx >= selStart && idx < selEnd)
+			style := highlightStyle(base, w.focused, inSel, idx == w.cursor)
 			inner.SetCell(col, row, r, style)
 		}
 	}
@@ -186,6 +201,9 @@ func (w *textAreaWidget) HandleEvent(e input.Event) tui.Cmd {
 	case input.PasteEvent:
 		w.insertString(ev.Text) // newlines allowed, unlike TextInput's paste
 		changed = true
+	case input.MouseEvent:
+		w.handleMouse(ev)
+		return nil // cursor/selection changes aren't content edits, no OnChange
 	default:
 		return nil
 	}
@@ -201,21 +219,22 @@ func (w *textAreaWidget) HandleEvent(e input.Event) tui.Cmd {
 }
 
 func (w *textAreaWidget) handleKey(ke input.KeyEvent) bool {
+	shift := ke.Mod&input.ModShift != 0
 	switch {
 	case ke.Key == input.KeyLeft:
-		w.cursor = max(w.cursor-1, 0)
+		w.moveHorizontal(-1, shift)
 	case ke.Key == input.KeyRight:
-		w.cursor = min(w.cursor+1, len(w.buf))
+		w.moveHorizontal(1, shift)
 	case ke.Key == input.KeyUp:
-		w.moveVertical(-1)
+		w.moveVertical(-1, shift)
 	case ke.Key == input.KeyDown:
-		w.moveVertical(1)
+		w.moveVertical(1, shift)
 	case ke.Key == input.KeyHome:
 		start, _ := lineBounds(w.buf, w.cursor)
-		w.cursor = start
+		w.moveTo(start, shift)
 	case ke.Key == input.KeyEnd:
 		_, end := lineBounds(w.buf, w.cursor)
-		w.cursor = end
+		w.moveTo(end, shift)
 
 	case ke.Key == input.KeyBackspace:
 		return w.backspace()
@@ -244,20 +263,22 @@ func (w *textAreaWidget) handleKey(ke input.KeyEvent) bool {
 
 // moveVertical moves the cursor to the equivalent column on the
 // previous (delta<0) or next (delta>0) line, clamped to that line's
-// length if it's shorter — the standard editor convention.
-func (w *textAreaWidget) moveVertical(delta int) {
+// length if it's shorter — the standard editor convention. shift
+// extends (or starts) the active selection to the new position, same
+// as every other movement here — see moveTo.
+func (w *textAreaWidget) moveVertical(delta int, shift bool) {
 	lineStart, lineEnd := lineBounds(w.buf, w.cursor)
 	col := w.cursor - lineStart
 
 	var targetStart, targetEnd int
 	switch {
 	case delta < 0 && lineStart == 0:
-		w.cursor = 0
+		w.moveTo(0, shift)
 		return
 	case delta < 0:
 		targetStart, targetEnd = lineBounds(w.buf, lineStart-1)
 	case delta > 0 && lineEnd == len(w.buf):
-		w.cursor = len(w.buf)
+		w.moveTo(len(w.buf), shift)
 		return
 	case delta > 0:
 		targetStart, targetEnd = lineBounds(w.buf, lineEnd+1)
@@ -265,7 +286,54 @@ func (w *textAreaWidget) moveVertical(delta int) {
 		return
 	}
 
-	w.cursor = min(targetStart+col, targetEnd)
+	w.moveTo(min(targetStart+col, targetEnd), shift)
+}
+
+// handleMouse implements click-to-position-cursor and click/drag-to-
+// select — see textInputWidget.handleMouse's identical doc comment for
+// the click-vs-drag-vs-Shift+click convention; setCursorFromMouse is
+// TextArea's own multi-line version of computing a buffer offset from
+// (X,Y).
+func (w *textAreaWidget) handleMouse(me input.MouseEvent) {
+	switch {
+	case me.Button == input.MouseLeft && !me.Drag:
+		w.dragging = true
+		if me.Mod&input.ModShift == 0 {
+			w.clearSelection()
+		} else {
+			w.startSelection()
+		}
+		w.setCursorFromMouse(me)
+	case w.dragging && me.Button == input.MouseLeft && me.Drag:
+		w.startSelection()
+		w.setCursorFromMouse(me)
+	case w.dragging && me.Button == input.MouseRelease:
+		w.startSelection()
+		w.setCursorFromMouse(me)
+		w.dragging = false
+	}
+}
+
+// setCursorFromMouse translates me's local (X,Y) into a buffer offset
+// and moves the cursor there, clamping to the nearest valid line/
+// column if the point falls outside the currently-painted content
+// (e.g. past the last line — or, since App keeps delivering mouse
+// events to whichever widget holds focus even once a drag leaves that
+// widget's own on-screen bounds (see tui.App.hitTest's doc comment), a
+// raw, untranslated absolute coordinate arriving mid-drag). Unlike
+// Table's column-resize drag (see its handleColumnDrag), this is safe
+// to just clamp rather than needing to detect and abandon the drag
+// outright: each event computes an absolute buffer position fresh from
+// (X,Y) rather than accumulating a delta from the previous event, so
+// one stray untranslated event produces at most one wrong-but-harmless
+// cursor placement for that single frame, not a compounding error.
+func (w *textAreaWidget) setCursorFromMouse(me input.MouseEvent) {
+	lines := splitLines(w.buf)
+	lineIdx := max(0, min(w.scrollRow+(me.Y-1), len(lines)-1))
+	ln := lines[lineIdx]
+
+	idx := ln.start + w.scrollCol + (me.X - 1)
+	w.cursor = max(ln.start, min(idx, ln.end))
 }
 
 func (w *textAreaWidget) Focusable() bool         { return true }

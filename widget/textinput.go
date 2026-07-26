@@ -50,6 +50,10 @@ type textInputWidget struct {
 
 	scrollOffset int
 	focused      bool
+
+	// dragging is true between a MouseLeft press and its matching
+	// release — see handleMouse.
+	dragging bool
 }
 
 func (w *textInputWidget) Reconcile(props any) bool {
@@ -100,16 +104,15 @@ func (w *textInputWidget) Paint(p *cell.Painter) {
 	}
 
 	base := w.opts.Theme.Text()
+	selStart, selEnd, hasSel := w.selectionRange()
 	for col := range innerW {
 		idx := w.scrollOffset + col
 		r := ' '
 		if idx < len(w.buf) {
 			r = w.buf[idx]
 		}
-		style := base
-		if idx == w.cursor && w.focused {
-			style = cell.Style{Fg: base.Fg, Bg: base.Bg, Attr: base.Attr | cell.AttrReverse}
-		}
+		inSel := hasSel && idx >= selStart && idx < selEnd
+		style := highlightStyle(base, w.focused, inSel, idx == w.cursor)
 		inner.SetCell(col, 0, r, style)
 	}
 }
@@ -133,6 +136,9 @@ func (w *textInputWidget) HandleEvent(e input.Event) tui.Cmd {
 	case input.PasteEvent:
 		w.insertString(stripNewlines(ev.Text))
 		changed = true
+	case input.MouseEvent:
+		w.handleMouse(ev)
+		return nil // cursor/selection changes aren't content edits, no OnChange
 	default:
 		return nil
 	}
@@ -151,15 +157,16 @@ func (w *textInputWidget) HandleEvent(e input.Event) tui.Cmd {
 // content (as opposed to just moving the cursor, which never needs an
 // OnChange notification).
 func (w *textInputWidget) handleKey(ke input.KeyEvent) bool {
+	shift := ke.Mod&input.ModShift != 0
 	switch {
 	case ke.Key == input.KeyLeft:
-		w.cursor = max(w.cursor-1, 0)
+		w.moveHorizontal(-1, shift)
 	case ke.Key == input.KeyRight:
-		w.cursor = min(w.cursor+1, len(w.buf))
+		w.moveHorizontal(1, shift)
 	case ke.Key == input.KeyHome:
-		w.cursor = 0
+		w.moveTo(0, shift)
 	case ke.Key == input.KeyEnd:
-		w.cursor = len(w.buf)
+		w.moveTo(len(w.buf), shift)
 
 	case ke.Key == input.KeyBackspace:
 		return w.backspace()
@@ -176,6 +183,44 @@ func (w *textInputWidget) handleKey(ke input.KeyEvent) bool {
 		return true
 	}
 	return false
+}
+
+// handleMouse implements click-to-position-cursor and click/drag-to-
+// select: a plain press moves the cursor there and drops any
+// selection; a Shift+press extends the active selection (starting one
+// if needed) to the clicked point instead; while the button stays
+// down, each further Drag event (and the final MouseRelease) starts a
+// selection the first time the mouse actually moves and extends it to
+// the new point — so a click with no movement in between never
+// creates a (zero-width, effectively invisible) selection.
+func (w *textInputWidget) handleMouse(me input.MouseEvent) {
+	switch {
+	case me.Button == input.MouseLeft && !me.Drag:
+		w.dragging = true
+		if me.Mod&input.ModShift == 0 {
+			w.clearSelection()
+		} else {
+			w.startSelection()
+		}
+		w.setCursorFromMouse(me)
+	case w.dragging && me.Button == input.MouseLeft && me.Drag:
+		w.startSelection()
+		w.setCursorFromMouse(me)
+	case w.dragging && me.Button == input.MouseRelease:
+		w.startSelection()
+		w.setCursorFromMouse(me)
+		w.dragging = false
+	}
+}
+
+// setCursorFromMouse moves the cursor to the buffer offset under
+// me's local (X,Y), doing nothing if Y isn't the single content row
+// (local row 1 — row 0 is the border).
+func (w *textInputWidget) setCursorFromMouse(me input.MouseEvent) {
+	if me.Y != 1 {
+		return
+	}
+	w.cursor = clampCursor(w.scrollOffset+(me.X-1), len(w.buf))
 }
 
 func (w *textInputWidget) Focusable() bool         { return true }

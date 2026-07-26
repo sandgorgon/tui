@@ -155,6 +155,153 @@ func TestTextInputPlaceholderShownWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestTextInputShiftArrowSelectsAndTypingReplaces(t *testing.T) {
+	var value string
+	app := textInputApp(t, TextInputOptions{
+		Theme: style.DefaultDark(),
+		OnChange: func(v string) tui.Msg {
+			value = v
+			return nil
+		},
+	})
+	for _, r := range "hello" {
+		app.HandleInput(input.KeyEvent{Rune: r})
+	}
+	// Cursor is at the end (5); Shift+Left x3 selects "llo" (offsets 2-5).
+	for range 3 {
+		app.HandleInput(input.KeyEvent{Key: input.KeyLeft, Mod: input.ModShift})
+	}
+	app.HandleInput(input.KeyEvent{Rune: 'X'})
+	if value != "heX" {
+		t.Fatalf("value = %q, want %q (typing over the selection should replace it)", value, "heX")
+	}
+}
+
+func TestTextInputBackspaceDeletesSelection(t *testing.T) {
+	var value string
+	app := textInputApp(t, TextInputOptions{
+		Theme: style.DefaultDark(),
+		OnChange: func(v string) tui.Msg {
+			value = v
+			return nil
+		},
+	})
+	for _, r := range "hello" {
+		app.HandleInput(input.KeyEvent{Rune: r})
+	}
+	for range 3 {
+		app.HandleInput(input.KeyEvent{Key: input.KeyLeft, Mod: input.ModShift})
+	}
+	app.HandleInput(input.KeyEvent{Key: input.KeyBackspace})
+	if value != "he" {
+		t.Fatalf("value = %q, want %q (Backspace should delete the whole selection, not one character)", value, "he")
+	}
+}
+
+func TestTextInputNonShiftArrowCollapsesSelectionToEdge(t *testing.T) {
+	var value string
+	app := textInputApp(t, TextInputOptions{
+		Theme: style.DefaultDark(),
+		OnChange: func(v string) tui.Msg {
+			value = v
+			return nil
+		},
+	})
+	for _, r := range "hello" {
+		app.HandleInput(input.KeyEvent{Rune: r})
+	}
+	for range 3 { // selects "llo" (offsets 2-5), cursor at 2 (anchor 5)
+		app.HandleInput(input.KeyEvent{Key: input.KeyLeft, Mod: input.ModShift})
+	}
+	// A plain (non-shift) Left with a selection active collapses to the
+	// selection's start rather than moving one more rune left.
+	app.HandleInput(input.KeyEvent{Key: input.KeyLeft})
+	app.HandleInput(input.KeyEvent{Rune: 'X'})
+	if value != "heXllo" {
+		t.Fatalf("value = %q, want %q (Left should have collapsed to the selection start, offset 2, then inserted there)", value, "heXllo")
+	}
+}
+
+func TestTextInputClickSetsCursorPosition(t *testing.T) {
+	var value string
+	app := textInputApp(t, TextInputOptions{
+		Theme: style.DefaultDark(),
+		OnChange: func(v string) tui.Msg {
+			value = v
+			return nil
+		},
+	})
+	for _, r := range "hello" {
+		app.HandleInput(input.KeyEvent{Rune: r})
+	}
+	// Content starts at local X=1 (X=0 is the border); clicking X=3 lands
+	// on buffer offset 2 ("l", the third character).
+	app.HandleInput(input.MouseEvent{X: 3, Y: 1, Button: input.MouseLeft})
+	app.HandleInput(input.KeyEvent{Rune: 'X'})
+	if value != "heXllo" {
+		t.Fatalf("value = %q, want %q (click should have placed the cursor at offset 2)", value, "heXllo")
+	}
+}
+
+func TestTextInputClickDragSelectsText(t *testing.T) {
+	var value string
+	app := textInputApp(t, TextInputOptions{
+		Theme: style.DefaultDark(),
+		OnChange: func(v string) tui.Msg {
+			value = v
+			return nil
+		},
+	})
+	for _, r := range "hello" {
+		app.HandleInput(input.KeyEvent{Rune: r})
+	}
+	app.HandleInput(input.MouseEvent{X: 1, Y: 1, Button: input.MouseLeft})             // press at offset 0
+	app.HandleInput(input.MouseEvent{X: 4, Y: 1, Button: input.MouseLeft, Drag: true}) // drag to offset 3
+	app.HandleInput(input.MouseEvent{X: 4, Y: 1, Button: input.MouseRelease})
+	app.HandleInput(input.KeyEvent{Key: input.KeyBackspace})
+	if value != "lo" {
+		t.Fatalf("value = %q, want %q (drag should have selected \"hel\", offsets 0-3, for Backspace to delete)", value, "lo")
+	}
+}
+
+func TestTextInputShiftClickExtendsSelection(t *testing.T) {
+	var value string
+	app := textInputApp(t, TextInputOptions{
+		Theme: style.DefaultDark(),
+		OnChange: func(v string) tui.Msg {
+			value = v
+			return nil
+		},
+	})
+	for _, r := range "hello" {
+		app.HandleInput(input.KeyEvent{Rune: r})
+	}
+	app.HandleInput(input.MouseEvent{X: 1, Y: 1, Button: input.MouseLeft}) // cursor -> offset 0
+	app.HandleInput(input.MouseEvent{X: 4, Y: 1, Button: input.MouseLeft, Mod: input.ModShift})
+	app.HandleInput(input.KeyEvent{Key: input.KeyBackspace})
+	if value != "lo" {
+		t.Fatalf("value = %q, want %q (Shift+click should extend the selection from offset 0 to 3)", value, "lo")
+	}
+}
+
+func TestTextInputSelectionHighlightedInBuffer(t *testing.T) {
+	app := textInputApp(t, TextInputOptions{Theme: style.DefaultDark()})
+	for _, r := range "hello" {
+		app.HandleInput(input.KeyEvent{Rune: r})
+	}
+	for range 3 {
+		app.HandleInput(input.KeyEvent{Key: input.KeyLeft, Mod: input.ModShift})
+	}
+	// Selection is offsets 2-5 ("llo"), at local X=3..5 (content starts
+	// at X=1). X=1,2 ("he") should be unstyled; X=3 should be reversed.
+	if got := app.Buffer().At(1, 1).Style.Attr & cell.AttrReverse; got != 0 {
+		t.Errorf("'h' (outside selection) has reverse attr set, want none")
+	}
+	if got := app.Buffer().At(3, 1).Style.Attr & cell.AttrReverse; got == 0 {
+		t.Errorf("'l' (inside selection) has no reverse attr, want it highlighted")
+	}
+}
+
 func TestTextInputPasteInsertsAndStripsNewlines(t *testing.T) {
 	var value string
 	app := textInputApp(t, TextInputOptions{

@@ -193,6 +193,86 @@ func TestTextAreaCustomReleaseKey(t *testing.T) {
 	}
 }
 
+func TestTextAreaShiftDownSelectsAcrossLinesAndTypingReplaces(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "abcd\nxy\nefgh"})
+	// Cursor mounts at the end ("efgh"'s last char, offset 11). Move to
+	// the very start, then Shift+Down x2 to select everything up to the
+	// equivalent column two lines down.
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome})
+	app.HandleInput(input.KeyEvent{Key: input.KeyUp})
+	app.HandleInput(input.KeyEvent{Key: input.KeyUp})
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome}) // now at offset 0, start of "abcd"
+	app.HandleInput(input.KeyEvent{Key: input.KeyDown, Mod: input.ModShift})
+	app.HandleInput(input.KeyEvent{Key: input.KeyDown, Mod: input.ModShift})
+	app.HandleInput(input.KeyEvent{Rune: 'X'})
+	if *value != "Xefgh" {
+		t.Fatalf("value = %q, want %q (typing should replace the selection spanning \"abcd\\nxy\\n\")", *value, "Xefgh")
+	}
+}
+
+func TestTextAreaBackspaceDeletesSelectionAcrossNewline(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "abc\ndef"})
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome}) // still on line 1 ("def"), col 0
+	app.HandleInput(input.KeyEvent{Key: input.KeyUp})   // -> line 0 ("abc"), col 0
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight, Mod: input.ModShift})
+	app.HandleInput(input.KeyEvent{Key: input.KeyDown, Mod: input.ModShift}) // extends to "abc\nd"
+	app.HandleInput(input.KeyEvent{Key: input.KeyBackspace})
+	if *value != "ef" {
+		t.Fatalf("value = %q, want %q (Backspace should delete the selection spanning the newline, joining the remaining halves)", *value, "ef")
+	}
+}
+
+func TestTextAreaClickSetsCursorOnCorrectLine(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "abcd\nxy\nefgh"})
+	// Border occupies row 0/col 0; content starts at local (1,1). Line 1
+	// ("xy") is the second content row, so Y=2; X=2 lands on col 1 of
+	// that line (offset 5+1=6, since "abcd\n" is 5 runes).
+	app.HandleInput(input.MouseEvent{X: 2, Y: 2, Button: input.MouseLeft})
+	app.HandleInput(input.KeyEvent{Rune: 'Z'})
+	if *value != "abcd\nxZy\nefgh" {
+		t.Fatalf("value = %q, want %q (click should have placed the cursor within \"xy\")", *value, "abcd\nxZy\nefgh")
+	}
+}
+
+func TestTextAreaDragSelectsAcrossLines(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "abcd\nxy\nefgh"})
+	// Press at start of line 0 ("abcd", Y=1,X=1 -> offset 0), drag down
+	// to line 2 ("efgh", Y=3,X=1 -> offset 8, start of "efgh").
+	app.HandleInput(input.MouseEvent{X: 1, Y: 1, Button: input.MouseLeft})
+	app.HandleInput(input.MouseEvent{X: 1, Y: 3, Button: input.MouseLeft, Drag: true})
+	app.HandleInput(input.MouseEvent{X: 1, Y: 3, Button: input.MouseRelease})
+	app.HandleInput(input.KeyEvent{Key: input.KeyBackspace})
+	if *value != "efgh" {
+		t.Fatalf("value = %q, want %q (drag should have selected \"abcd\\nxy\\n\" for Backspace to delete)", *value, "efgh")
+	}
+}
+
+func TestTextAreaSelectionHighlightedInBuffer(t *testing.T) {
+	app, _ := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "abcd\nxy\nefgh"})
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome})
+	app.HandleInput(input.KeyEvent{Key: input.KeyUp})
+	app.HandleInput(input.KeyEvent{Key: input.KeyUp})
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome}) // offset 0
+	app.HandleInput(input.KeyEvent{Key: input.KeyDown, Mod: input.ModShift})
+
+	// Line 0 ("abcd") is fully swept (selection continues into line 1),
+	// so its whole row — including the padding past "abcd" — should be
+	// highlighted; line 1 ("xy") isn't touched at all yet.
+	if got := app.Buffer().At(1, 1).Style.Attr & cell.AttrReverse; got == 0 {
+		t.Errorf("'a' on the fully-selected first line has no reverse attr, want it highlighted")
+	}
+	if got := app.Buffer().At(6, 1).Style.Attr & cell.AttrReverse; got == 0 {
+		t.Errorf("padding past \"abcd\" on the fully-selected first line has no reverse attr, want the row highlighted to show the selection continues")
+	}
+	// X=1 ("x") is where the cursor itself now sits (the selection's
+	// moving end, at line 1's start) — legitimately highlighted as the
+	// caret, not as "inside" the selection. X=2 ("y") has neither and
+	// should be plain.
+	if got := app.Buffer().At(2, 2).Style.Attr & cell.AttrReverse; got != 0 {
+		t.Errorf("'y' on the untouched second line has reverse attr set, want none")
+	}
+}
+
 func TestTextAreaPlaceholderShownWhenEmpty(t *testing.T) {
 	node := TextArea(TextAreaOptions{Theme: style.DefaultDark(), Placeholder: "type here"})
 	buf := cell.NewBuffer(14, 5)

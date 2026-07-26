@@ -406,12 +406,56 @@ rather than being a late add-on.
   signal that trust should end. Keyboard `Shift+Left/Right` resizing is
   unaffected (untouched code path).
 
-  **Explicitly still out of scope, not silently dropped:**
-  - Click-to-position-cursor and click/drag-to-select text in
-    `TextInput`/`TextArea` — real extra complexity (coordinate math
-    through the field's own horizontal/vertical scroll, plus new
-    selection-range state) distinct from the row/tab/column index
-    translation every other widget in this pass needed.
+  **TextInput/TextArea selection (keyboard and mouse) — done (post-M12),
+  completing the last of the three post-M12 mouse follow-ups.** New
+  shared state on `editBuffer` (`hasSelection`/`selAnchor`, a collapsed
+  selection — anchor == cursor — deliberately not counting as active):
+  `selectionRange`/`startSelection`/`clearSelection`, plus
+  `moveTo`/`moveHorizontal` encapsulating the "shift extends, plain
+  movement drops" convention every navigation key now goes through.
+  Built keyboard selection first, as planned, to validate the state
+  design before the mouse coordinate math: Shift+Left/Right/Up/Down/
+  Home/End extend a selection; plain Left/Right collapse to whichever
+  selection edge is in that direction instead of moving one rune from
+  the cursor's current position (the standard editor convention); Up/
+  Down/Home/End more simply just drop the selection and move normally
+  (a deliberate simplification — a widget library, not a full editor).
+  Typing a rune, pasting, or inserting a newline/tab now replaces an
+  active selection (`insertRune`/`insertString` call the new
+  `removeSelectionNoUndo` as part of the same undo step); Backspace/
+  Delete delete the whole selection instead of one character
+  (`deleteSelection`); undo/redo drop any active selection, matching
+  every mainstream editor. Painting (`TextInput`/`TextArea.Paint`) now
+  goes through a shared `highlightStyle` helper: reverse video (the
+  same convention this codebase already uses for a selected List/Table
+  row), for either the active selection or the raw cursor, no separate
+  look between them (matches vim visual-mode: no distinct caret glyph
+  once a selection is showing). `TextArea`'s multi-line case needed
+  care here: a naive per-cell check using the flat buffer index breaks
+  down for the padding cells past a short line's end (they'd
+  spuriously read as "selected" or not by coincidentally colliding with
+  a *different* line's real buffer offsets); fixed by classifying each
+  row as either fully swept by the selection (highlight the whole row,
+  padding included, so a multi-line selection reads as one continuous
+  block) or checking real per-character positions only.
+  Click-to-position-cursor and click/drag-to-select reuse the same
+  `editBuffer` state: a plain press moves the cursor and drops any
+  selection; Shift+press extends the active selection (starting one if
+  needed) to the clicked point; while the button stays down, each
+  further Drag event (and the final release) starts a selection the
+  moment the mouse actually moves and extends it to the new point, so a
+  click with no movement never creates a (zero-width, invisible)
+  selection. `TextArea.setCursorFromMouse` handles the same drag-
+  outside-bounds gotcha `Table`'s column-resize drag needed defending
+  against (see that entry above), but resolves it differently and more
+  simply: since each mouse event computes an absolute buffer position
+  fresh from (X,Y) — clamped to the nearest valid line/column — rather
+  than accumulating a delta from the previous event the way Table's
+  column width does, one stray untranslated event (raw absolute
+  coordinates arriving because the drag left the widget's tracked Rect
+  while it's still focused) produces at most one wrong-but-harmless
+  cursor placement for that single frame, not Table's compounding-error
+  risk — no need to detect and abandon the drag outright.
 - **Mouse reporting and native terminal text selection are mutually
   exclusive by protocol** — enabling mouse mode (`\x1b[?1000h\x1b[?1006h`,
   see `examples/rawecho`'s `enableMouse`) is exactly what makes click-to-

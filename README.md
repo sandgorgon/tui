@@ -8,15 +8,16 @@ dependencies**.
 go get github.com/sandgorgon/tui
 ```
 
-Status: pre-1.0, M0-M11 shipped (full widget catalog, PTY subsystem,
-embedded terminal emulator, theming), M12 (hardening: fuzzing, golden
-tests, benchmarks, docs) in progress. No stable API yet — see
+Status: pre-1.0, M0-M12 shipped (full widget catalog, PTY subsystem,
+embedded terminal emulator, theming, fuzzing/golden tests/benchmarks/
+examples gallery). No stable API yet — see
 [`docs/DESIGN.md`](docs/DESIGN.md) §8 for the milestone table.
 
 ## What this is
 
 - A complete TUI component library: layout, styling, input, and a full
   widget set (text, lists, tables, trees, forms, overlays, data viz).
+  See `examples/gallery` for all of it running together in one app.
 - A PTY subsystem with a full embedded VT100/xterm-compatible terminal
   emulator, capable enough to run a real shell, `vim`, `htop`, or `less`
   inside a pane — the building block for things like a terminal

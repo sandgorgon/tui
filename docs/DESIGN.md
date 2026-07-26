@@ -300,7 +300,7 @@ rather than being a late add-on.
 | M9 | style/theme system |
 | M10 | Widgets batch 1 — structural/text: Box, Paragraph, List, Viewport, Tabs, StatusBar, ProgressBar, Spinner — golden coverage via the M5 harness |
 | M11 | Widgets batch 2 — input/data, plus formalizing M6's prototype as the proper L5 `Terminal` widget: TextInput, TextArea, Table, Tree, Select, Checkbox/Radio, Modal, CommandPalette |
-| M12 | Hardening: ~~fuzz corpus expansion~~ (done — see §9), ~~full golden-file coverage across all widgets~~ (done — see §9), ~~benchmarks~~ (done — see §9), docs, examples gallery, ~~mouse hit-testing~~ (done — see §9), ~~OSC 52 clipboard copy~~ (done — see §9) |
+| M12 | Hardening: ~~fuzz corpus expansion~~ (done — see §9), ~~full golden-file coverage across all widgets~~ (done — see §9), ~~benchmarks~~ (done — see §9), ~~docs~~ (done), ~~examples gallery~~ (done — see §9), ~~mouse hit-testing~~ (done — see §9), ~~OSC 52 clipboard copy~~ (done — see §9) |
 | M13 (explicitly deferred, not in v1) | Windows/ConPTY backend, image protocols, accessibility mode, terminfo db compat |
 
 ---
@@ -455,6 +455,66 @@ rather than being a late add-on.
   reusing retained widgets) — plus a `widget`-package composite frame
   covering the M10 widget catalog together, the same frame
   `roundtrip_test.go` already used for round-trip coverage.
+
+  **Examples gallery — done (M12).** `examples/gallery`: a single App
+  exercising every `widget.Xxx` constructor plus `style` theming
+  (including `DetectAppearance`) together, per the examples philosophy
+  (a new example built to showcase the current widget catalog, not a
+  retrofit of `examples/todo` or `examples/multiplexer`). Four
+  `Tabs`-switched pages (text/feedback, lists/data, forms, a live
+  `Terminal` running `$SHELL`) plus `CommandPalette`/`Modal` reachable
+  globally. Verified end to end via a real pty — not just `go build` —
+  using this project's own `pty` package to script keystrokes and read
+  the result back through `vt.Parser` (the same pattern the project's
+  own integration tests already use), since tmux wasn't available in
+  the sandbox this was built in; a driver script is not checked in
+  (throwaway, lived under the scratch dir for this session).
+
+  That real end-to-end run — not any unit test — caught two genuine
+  library bugs, both fixed at the source rather than routed around in
+  the example:
+
+  - **Reconciler panic on an unkeyed widget-type change.** `reconcile`
+    (`tui/reconcile.go`) only compared `Node.kind` (`kindText`/
+    `kindBox`/`kindWidget`) to decide whether to reuse a retained node
+    or mount fresh — but `kindWidget` is one flat tag shared by every
+    `widget.Xxx` constructor. Switching gallery's Tabs to a page whose
+    content is a different widget type at the same unkeyed tree
+    position (page 0's `Paragraph` vs. page 1's `List`, both at the
+    same `Box`-child slot) made `reconcile` reuse the old frame's
+    `*paragraphWidget` and hand it the new frame's `listProps`,
+    panicking on that widget's own `props.(paragraphProps)` type
+    assertion — a real, easy-to-hit case (any conditionally-rendered
+    branch without an explicit `Node.Key`, not a contrived one) that
+    no existing widget/tui test exercised, since none of them swap
+    which concrete widget occupies a slot across `Reconcile` calls.
+    Fixed by having `retained` remember the `reflect.Type` of the
+    props it was last given (`propsType`) and treating a type change
+    as a mount-fresh case alongside the existing kind/nil checks — see
+    `reconcile`'s doc comment. `tui.TestReconcileWidgetTypeChangeMountsFreshInsteadOfPanicking`
+    is the regression test (a `strictWidget` double that actually
+    type-asserts its props, unlike `fakeWidget`, which couldn't have
+    caught this).
+  - **`input.Decoder` crash on a terminal without read-deadline
+    support.** `readByteTimeout` treated any `SetReadDeadline` error as
+    fatal, propagating it straight out of `Decode` — so on a reader
+    that can't support deadlines at all (`os.ErrNoDeadline`, observed
+    via the pty allocated by the gallery's own nested test harness; see
+    `input.decode_test.go`'s `noDeadlineReader`), a single standalone
+    Escape keypress (the one call site that actually needs the
+    timeout, to tell a bare Escape from the start of a sequence) killed
+    the entire `App` — reproduced identically against the already-
+    shipped, unmodified `examples/todo`, confirming this predates the
+    gallery and isn't gallery-specific. Fixed to degrade instead of
+    crash: an `os.ErrNoDeadline` result from `SetReadDeadline` is now
+    treated the same as an immediate timeout (standalone Escape
+    reported right away). The trade-off is real and stated in
+    `readByteTimeout`'s doc comment: without any way to wait for a
+    follow-up byte, multi-byte escape sequences can't be told apart
+    from a bare Escape on such a reader and decode as a spurious KeyEsc
+    plus separate keystrokes — degraded, but never a crash. Any other
+    `SetReadDeadline` failure (e.g. an already-closed reader) still
+    propagates as a real error.
 
 ---
 

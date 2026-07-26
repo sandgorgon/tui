@@ -38,6 +38,32 @@ func Quit() Cmd {
 	return func() Msg { return QuitMsg{} }
 }
 
+// ClipboardMsg, produced by CopyToClipboard, tells Run to write Text
+// to the system clipboard.
+type ClipboardMsg struct{ Text string }
+
+// CopyToClipboard is a Cmd that copies text to the system clipboard
+// via OSC 52 (term.WriteClipboard) — the complementary answer to
+// mouse reporting breaking the terminal's own native click-drag
+// selection (see docs/DESIGN.md §9): an app-initiated copy that
+// doesn't depend on it. It's usable from Update (`return m,
+// tui.CopyToClipboard(text)`, the same shape as Quit()) or from a
+// widget's onEvent callback, which can simply return ClipboardMsg{Text:
+// text} directly as its Msg — HandleEvent's existing "wrap whatever
+// onEvent returns in a Cmd" plumbing (see Focusable, List, ...) already
+// turns that into the same thing.
+//
+// This Cmd deliberately does not write anything itself: doing so from
+// its own goroutine could interleave, byte for byte, with the App's
+// own render output on the same stdout, since both would be
+// concurrent writers with no shared lock. Instead it returns
+// ClipboardMsg, which Run recognizes and writes on its own single
+// goroutine — the same one already responsible for all terminal
+// output, so there's nothing to interleave with.
+func CopyToClipboard(text string) Cmd {
+	return func() Msg { return ClipboardMsg{Text: text} }
+}
+
 // BatchMsg, produced by Batch, tells the App to run each Cmd
 // concurrently rather than treating BatchMsg itself as an application
 // Msg — Update never sees a BatchMsg.

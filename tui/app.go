@@ -247,11 +247,14 @@ func (a *App) moveFocus(forward bool) {
 // Run puts the terminal into raw mode and the alternate screen, then
 // drives the App until Update produces a Cmd that yields QuitMsg (see
 // Quit) or stdin returns an error, rendering each frame's diff via
-// package render. It exercises the same pty-free real-terminal setup
-// established by examples/rawecho and examples/multiplexer (M1/M6):
-// MakeRaw, capability probing, a Watcher for resize/resume, and an
-// input.Decoder goroutine fed through prefixedReader so bytes left
-// over from Probe aren't lost.
+// package render. A ClipboardMsg (see CopyToClipboard) is handled here
+// too — written directly rather than passed to Dispatch, since Run's
+// own goroutine is the only place it's safe to write it without
+// interleaving with render output on the same stdout. It exercises the
+// same pty-free real-terminal setup established by examples/rawecho
+// and examples/multiplexer (M1/M6): MakeRaw, capability probing, a
+// Watcher for resize/resume, and an input.Decoder goroutine fed
+// through prefixedReader so bytes left over from Probe aren't lost.
 func (a *App) Run() error {
 	if !term.IsTerminal(os.Stdin) {
 		return errors.New("stdin is not a terminal")
@@ -343,11 +346,18 @@ func (a *App) Run() error {
 			}
 
 		case msg := <-msgCh:
-			if _, ok := msg.(QuitMsg); ok {
+			switch m := msg.(type) {
+			case QuitMsg:
 				return nil
+			case ClipboardMsg:
+				// Written here, on Run's single goroutine, rather than
+				// from whatever Cmd produced this Msg — see
+				// CopyToClipboard's doc comment on why that matters.
+				_ = term.WriteClipboard(os.Stdout, m.Text)
+			default:
+				runCmd(a.Dispatch(msg))
+				redraw()
 			}
-			runCmd(a.Dispatch(msg))
-			redraw()
 
 		case <-watcher.Resize():
 			if size, err := term.GetSize(os.Stdout); err == nil {

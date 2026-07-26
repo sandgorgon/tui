@@ -300,7 +300,7 @@ rather than being a late add-on.
 | M9 | style/theme system |
 | M10 | Widgets batch 1 — structural/text: Box, Paragraph, List, Viewport, Tabs, StatusBar, ProgressBar, Spinner — golden coverage via the M5 harness |
 | M11 | Widgets batch 2 — input/data, plus formalizing M6's prototype as the proper L5 `Terminal` widget: TextInput, TextArea, Table, Tree, Select, Checkbox/Radio, Modal, CommandPalette |
-| M12 | Hardening: fuzz corpus expansion, full golden-file coverage across all widgets, benchmarks, docs, examples gallery, ~~mouse hit-testing~~ (done — see §9), **OSC 52 clipboard copy** (see §9) |
+| M12 | Hardening: fuzz corpus expansion, full golden-file coverage across all widgets, benchmarks, docs, examples gallery, ~~mouse hit-testing~~ (done — see §9), ~~OSC 52 clipboard copy~~ (done — see §9) |
 | M13 (explicitly deferred, not in v1) | Windows/ConPTY backend, image protocols, accessibility mode, terminfo db compat |
 
 ---
@@ -368,13 +368,28 @@ rather than being a late add-on.
   terminal emulator's own selection/copy behavior; the universal escape
   hatch is the terminal's own bypass modifier (Shift-drag, on virtually
   every emulator), not something this library can restore — the same
-  tradeoff vim/tmux/htop-with-mouse-on already live with. **OSC 52
-  clipboard copy**, added to M12 alongside mouse hit-testing, is the
-  complementary answer for the common case this conflict actually
-  blocks: an app-initiated "copy" action (e.g. a keybinding on
-  `Table`/`List`/`Tree` to copy the selected row/cell/path) that writes
-  straight to the system clipboard via the OSC 52 escape sequence,
-  sidestepping drag-select entirely rather than trying to preserve it.
+  tradeoff vim/tmux/htop-with-mouse-on already live with.
+
+  **OSC 52 clipboard copy — done (M12).** `term.WriteClipboard(w,
+  text)` base64-encodes text and writes it wrapped in an OSC 52 escape
+  sequence (BEL-terminated, matching this project's other OSC sequence
+  — OSC 8 hyperlinks, `render.appendHyperlink`); on a terminal that
+  doesn't support OSC 52 it's simply ignored, since there's no reliable
+  way to probe for support first (unlike DA1/DA2). `tui.ClipboardMsg`/
+  `tui.CopyToClipboard(text) Cmd` are the app-facing side — usable from
+  `Update` (`return m, tui.CopyToClipboard(text)`, the same shape as
+  `Quit()`) or from any widget's `onEvent` callback, which can just
+  return `ClipboardMsg{Text: text}` directly as its `Msg` (the existing
+  "wrap whatever onEvent returns in a Cmd" plumbing every widget already
+  has does the rest). `App.Run` special-cases `ClipboardMsg` the same
+  way it already special-cases `QuitMsg`, writing it on Run's own single
+  goroutine rather than from the Cmd's — deliberately, since a Cmd
+  writing directly to stdout from its own goroutine could interleave,
+  byte for byte, with the App's render output on the same fd, and
+  there's no shared lock between them. No widget (`Table`/`List`/`Tree`)
+  hardcodes a copy keybinding itself — same as every other
+  business-decision key (Enter/Space/etc.), which key copies what is
+  entirely up to the application's own `onEvent` handling.
 
 ---
 

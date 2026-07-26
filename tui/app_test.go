@@ -40,6 +40,23 @@ func TestAppDispatchUpdatesModelAndRepaints(t *testing.T) {
 	}
 }
 
+func TestAppDispatchPassesClipboardMsgThroughToModelUnchanged(t *testing.T) {
+	// Dispatch is I/O-free by design (docs/DESIGN.md §10) — only Run's
+	// own goroutine ever actually writes a ClipboardMsg (see
+	// CopyToClipboard's doc comment); Dispatch itself must treat it
+	// like any other Msg, not intercept or drop it.
+	var seen Msg
+	m := &appTestModel{onUpdate: func(msg Msg) { seen = msg }}
+	a := NewApp(m, 10, 3)
+
+	a.Dispatch(ClipboardMsg{Text: "copied text"})
+
+	cm, ok := seen.(ClipboardMsg)
+	if !ok || cm.Text != "copied text" {
+		t.Errorf("Model.Update saw %#v, want ClipboardMsg{Text: \"copied text\"}", seen)
+	}
+}
+
 func TestAppResizeRepaintsAtNewSize(t *testing.T) {
 	a := NewApp(&counterModel{}, 12, 1)
 	a.Resize(8, 1)

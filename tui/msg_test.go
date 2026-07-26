@@ -9,6 +9,17 @@ func TestQuit(t *testing.T) {
 	}
 }
 
+func TestCopyToClipboard(t *testing.T) {
+	msg := CopyToClipboard("hello")()
+	cm, ok := msg.(ClipboardMsg)
+	if !ok {
+		t.Fatalf("CopyToClipboard(...)() = %#v (%T), want ClipboardMsg", msg, msg)
+	}
+	if cm.Text != "hello" {
+		t.Errorf("ClipboardMsg.Text = %q, want %q", cm.Text, "hello")
+	}
+}
+
 func TestBatchEmpty(t *testing.T) {
 	if Batch() != nil {
 		t.Error("Batch() with no cmds should be nil")

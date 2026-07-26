@@ -505,6 +505,22 @@ func (d *Decoder) readByte() (byte, error) {
 
 // readByteTimeout tries to read one more byte within timeout. ok is
 // false (with a nil error) if the deadline passed with nothing arriving.
+//
+// If the reader doesn't support deadlines at all (os.ErrNoDeadline —
+// some ptys under nested/virtualized terminal setups, observed via
+// examples/gallery run under a sandboxed nested-pty test harness, M12;
+// see docs/DESIGN.md §9), this treats it the same as an immediate
+// timeout rather than propagating a fatal error: the caller (typically
+// decodeEscape) reports a standalone Escape right away instead of
+// Decode returning an error that would otherwise kill the whole App
+// over a single Escape keypress. The trade-off is real and one-sided
+// in that scenario: without any way to wait for a follow-up byte,
+// multi-byte escape sequences (arrows, function keys, ...) can't be
+// told apart from a bare Escape and decode as one KeyEsc plus whatever
+// separate keystrokes their remaining bytes look like — degraded
+// input decoding, but never a crash. A SetReadDeadline failure for any
+// other reason (e.g. the reader is already closed) still propagates,
+// since that's a real error Decode's caller needs to see.
 func (d *Decoder) readByteTimeout(timeout time.Duration) (b byte, ok bool, err error) {
 	if d.pos < len(d.buf) {
 		b := d.buf[d.pos]
@@ -512,6 +528,9 @@ func (d *Decoder) readByteTimeout(timeout time.Duration) (b byte, ok bool, err e
 		return b, true, nil
 	}
 	if err := d.r.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		if errors.Is(err, os.ErrNoDeadline) {
+			return 0, false, nil
+		}
 		return 0, false, err
 	}
 	defer d.r.SetReadDeadline(time.Time{})

@@ -2,6 +2,7 @@ package input
 
 import (
 	"net"
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -199,6 +200,42 @@ func TestDecodeSequenceOfEvents(t *testing.T) {
 	got := decodeN(t, input, len(want))
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("decodeN(%q) = %#v, want %#v", input, got, want)
+	}
+}
+
+// noDeadlineReader wraps a real reader but fails every SetReadDeadline
+// call with os.ErrNoDeadline, standing in for a pty/tty that doesn't
+// support read deadlines at all (observed in practice via a sandboxed
+// nested-pty test harness for examples/gallery, M12 — see
+// docs/DESIGN.md §9).
+type noDeadlineReader struct{ r reader }
+
+func (n noDeadlineReader) Read(p []byte) (int, error)      { return n.r.Read(p) }
+func (n noDeadlineReader) SetReadDeadline(time.Time) error { return os.ErrNoDeadline }
+
+// TestDecodeEscAloneWithoutDeadlineSupportDoesNotError is a regression
+// test for a real crash: readByteTimeout used to propagate
+// SetReadDeadline's error straight out of Decode, so on a reader that
+// can't support deadlines, a single standalone Escape keypress made
+// Decode return a fatal error — which killed the whole App (confirmed
+// against the already-shipped examples/todo, not something introduced
+// by gallery). It must instead behave like an immediate timeout: still
+// report KeyEsc, no error.
+func TestDecodeEscAloneWithoutDeadlineSupportDoesNotError(t *testing.T) {
+	server, client := net.Pipe()
+	t.Cleanup(func() { server.Close(); client.Close() })
+	go client.Write([]byte{0x1b})
+
+	d := NewDecoder(noDeadlineReader{r: server})
+	d.SetEscTimeout(20 * time.Millisecond)
+
+	ev, err := d.Decode()
+	if err != nil {
+		t.Fatalf("Decode returned an error instead of degrading gracefully: %v", err)
+	}
+	want := KeyEvent{Key: KeyEsc}
+	if !reflect.DeepEqual(ev, want) {
+		t.Errorf("decode(ESC alone, no deadline support) = %#v, want %#v", ev, want)
 	}
 }
 

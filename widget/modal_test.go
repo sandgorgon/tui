@@ -19,6 +19,9 @@ type modalHostModel struct {
 func (m *modalHostModel) Init() tui.Cmd { return nil }
 func (m *modalHostModel) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 	m.events = append(m.events, msg)
+	if msg == "close" {
+		m.open = false
+	}
 	return m, nil
 }
 func (m *modalHostModel) View() tui.Node {
@@ -26,7 +29,10 @@ func (m *modalHostModel) View() tui.Node {
 		tui.Child(layout.Fill(1), tui.Focusable("bg", tui.Text("background", cell.Style{}), func(e input.Event) tui.Msg { return "bg" })),
 		tui.Child(layout.Length(0), Modal(
 			Field1AndField2(),
-			ModalOptions{Theme: style.DefaultDark(), Open: m.open, Title: "Confirm", Width: 20, Height: 8},
+			ModalOptions{
+				Theme: style.DefaultDark(), Open: m.open, Title: "Confirm", Width: 20, Height: 8,
+				OnOutsideClick: func() tui.Msg { return "close" },
+			},
 		)),
 	)
 }
@@ -101,6 +107,42 @@ func TestModalClosingReturnsFocusToBackground(t *testing.T) {
 	cmds := app.HandleInput(input.KeyEvent{Rune: 'x'})
 	if len(cmds) != 1 || cmds[0]() != "bg" {
 		t.Fatalf("expected background focused after modal closed, got %v", cmds)
+	}
+}
+
+// Dialog is Width:20, Height:8 centered in the 30x10 frame these tests
+// use throughout: x=(30-20)/2=5, y=(10-8)/2=1, so it spans
+// [5,25)x[1,9). (0,0) is well outside it.
+
+func TestModalOutsideClickDoesNotReachBodyFocusedWidget(t *testing.T) {
+	m := &modalHostModel{open: true}
+	app := tui.NewApp(m, 30, 10)
+
+	cmds := app.HandleInput(input.MouseEvent{X: 0, Y: 0, Button: input.MouseLeft})
+	for _, c := range cmds {
+		if v := c(); v == "f1" || v == "bg" {
+			t.Errorf("click outside the dialog must not be misrouted to a focused field or the background, got %v", v)
+		}
+	}
+}
+
+func TestModalOutsideClickInvokesOnOutsideClick(t *testing.T) {
+	m := &modalHostModel{open: true}
+	app := tui.NewApp(m, 30, 10)
+
+	handleAndRun(app, input.MouseEvent{X: 0, Y: 0, Button: input.MouseLeft})
+	if m.open {
+		t.Error("expected OnOutsideClick to close the modal on a click outside the dialog")
+	}
+}
+
+func TestModalInsideClickStillReachesBodyFocusedWidget(t *testing.T) {
+	m := &modalHostModel{open: true}
+	app := tui.NewApp(m, 30, 10)
+
+	cmds := app.HandleInput(input.MouseEvent{X: 10, Y: 4, Button: input.MouseLeft})
+	if len(cmds) != 1 || cmds[0]() != "f1" {
+		t.Errorf("expected a click inside the dialog to still reach the focused field's onEvent, got %v", cmds)
 	}
 }
 

@@ -81,6 +81,11 @@ type commandPaletteWidget struct {
 	resultCursor int
 	scrollOffset int
 	filtered     []scoredCommand
+
+	// lastRect/rectSet back OverlayBounds — see modalWidget's identical
+	// fields for why App needs this.
+	lastRect cell.Rect
+	rectSet  bool
 }
 
 func (w *commandPaletteWidget) Reconcile(props any) bool {
@@ -127,9 +132,11 @@ func (w *commandPaletteWidget) refilter() {
 
 func (w *commandPaletteWidget) PaintOverlay(p *cell.Painter) {
 	if !w.opts.Open {
+		w.rectSet = false
 		return
 	}
-	dialog := centeredOverlay(p, w.opts.Width, w.opts.Height)
+	dialog, rect := centeredOverlay(p, w.opts.Width, w.opts.Height)
+	w.lastRect, w.rectSet = rect, true
 	width, height := dialog.Size()
 	if width < 2 || height < 2 {
 		return
@@ -263,6 +270,23 @@ func (w *commandPaletteWidget) HandleEvent(e input.Event) tui.Cmd {
 	case ke.Key == input.KeyNone && ke.Rune != 0 && ke.Mod&(input.ModCtrl|input.ModAlt) == 0:
 		w.insertRune(ke.Rune)
 		w.refilter()
+	}
+	return nil
+}
+
+// OverlayBounds reports the palette's absolute Rect from its last
+// PaintOverlay — see tui.OverlayBounds.
+func (w *commandPaletteWidget) OverlayBounds() (cell.Rect, bool) { return w.lastRect, w.rectSet }
+
+// HandleOutsideClick implements tui.OutsideClicker by reusing OnCancel
+// — for a command picker, clicking outside means the same thing as
+// pressing Esc.
+func (w *commandPaletteWidget) HandleOutsideClick(input.MouseEvent) tui.Cmd {
+	if w.opts.OnCancel == nil {
+		return nil
+	}
+	if msg := w.opts.OnCancel(); msg != nil {
+		return func() tui.Msg { return msg }
 	}
 	return nil
 }

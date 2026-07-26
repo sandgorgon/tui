@@ -358,15 +358,32 @@ rather than being a late add-on.
   the time it sees a click the coordinates are already local — exactly
   what a real program running inside (vim, tmux, ...) expects.
 
+  **Modal/CommandPalette click-outside-to-close — done (post-M12).**
+  `collectRects` still doesn't see into `Modal`/`CommandPalette`'s
+  `PaintOverlay` content (drawn outside the normal Box tree at a
+  computed centered position), so a click anywhere on screen while one
+  is open used to reach whichever of the scope's own `Focusables`
+  currently held focus with raw, untranslated absolute coordinates —
+  harmless only by accident, since no shipped modal/palette body reacted
+  to `MouseEvent`, but a real bug (a body that did would misfire on an
+  unrelated click). Fixed with a new pair of optional interfaces in
+  `tui`: `OverlayBounds` (a `FocusScope` reports its own last-painted
+  absolute `Rect`) and `OutsideClicker` (reacts to a click landing
+  outside it). `App.HandleInput` checks `OverlayBounds` whenever a
+  `MouseEvent` lands on nothing tracked while a scope is active:
+  outside the reported bounds, the event is withheld from the scope's
+  focused widget entirely (fixing the misrouting unconditionally) and,
+  if the scope also implements `OutsideClicker`, forwarded there
+  instead. `centeredOverlay` (shared by `Modal`/`CommandPalette`) now
+  returns the `Rect` it computed, not just the clipped `Painter`, so
+  each widget can cache it from `PaintOverlay` and serve it back via
+  `OverlayBounds`. `CommandPalette` reuses its existing `OnCancel`
+  callback for `HandleOutsideClick` (outside-click means the same thing
+  as Esc for a picker); `Modal` gained a new `OnOutsideClick` option
+  (nil by default — an outside click is simply absorbed rather than
+  misrouted, unless the app opts in to using it to close the dialog).
+
   **Explicitly still out of scope, not silently dropped:**
-  - Hit-testing into `Modal`/`CommandPalette`'s `PaintOverlay` content —
-    drawn outside the normal Box tree at a computed centered position, so
-    `collectRects` doesn't see it; clicks while one is open keep routing
-    to its exclusive `FocusScope` target regardless of where they land
-    (this happens automatically, not via a special-case check: the
-    background tree's rects simply don't match any entry in
-    `App.focusables` while a scope is active). Making the overlay itself
-    position-aware (e.g. click-outside-to-close) is a real follow-up.
   - Drag-to-resize a `Table` column via mouse — keyboard `Shift+Left/
     Right` already covers resizing; wiring an actual click-and-drag
     gesture is new state (which boundary is being dragged, live-updating

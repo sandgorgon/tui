@@ -6,8 +6,12 @@ import "github.com/sandgorgon/tui/cell"
 // wantW x wantH, centered within p (whose Size() is the full frame) —
 // wantW/wantH <= 0 or larger than the frame means "use the whole
 // frame". Shared by the two tui.OverlayPainter widgets in this
-// package, Modal and CommandPalette.
-func centeredOverlay(p *cell.Painter, wantW, wantH int) *cell.Painter {
+// package, Modal and CommandPalette. The returned Rect is in p's own
+// local coordinates (same convention as Painter.Clip); callers that
+// need to report it as tui.OverlayBounds rely on PaintOverlay always
+// being handed an unclipped, whole-buffer Painter by the App, making
+// local and absolute coordinates the same thing.
+func centeredOverlay(p *cell.Painter, wantW, wantH int) (*cell.Painter, cell.Rect) {
 	width, height := p.Size()
 	w, h := wantW, wantH
 	if w <= 0 || w > width {
@@ -17,7 +21,8 @@ func centeredOverlay(p *cell.Painter, wantW, wantH int) *cell.Painter {
 		h = height
 	}
 	x, y := (width-w)/2, (height-h)/2
-	return p.Clip(cell.Rect{X: x, Y: y, W: w, H: h})
+	r := cell.Rect{X: x, Y: y, W: w, H: h}
+	return p.Clip(r), r
 }
 
 // drawBorder paints a single-line box border in style around the

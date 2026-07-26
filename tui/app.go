@@ -145,13 +145,21 @@ func (a *App) render() {
 // (click-to-focus) and is forwarded with its coordinates translated
 // to be local to that widget, so a widget never needs to know its own
 // absolute screen position — the same principle cell.Painter.Clip
-// already uses for drawing. Every event is also delivered to the
-// Model as a Msg via Dispatch, at its original (untranslated)
-// coordinates, so application code can implement global keys or react
-// to absolute screen position — and, separately, to whichever widget
-// currently holds focus via its HandleEvent — see Focusable and List
-// for how their onEvent prop turns that into an application Msg. It
-// returns every Cmd produced by either path, for the caller to run.
+// already uses for drawing. A MouseEvent landing on nothing tracked
+// while a FocusScope is active (see hitTest's doc comment on why that
+// always misses) is checked against the scope's OverlayBounds, if it
+// implements that interface: outside the reported bounds, the event is
+// withheld from the scope's focused widget entirely (rather than
+// delivered with raw absolute coordinates, a real bug for any scope
+// body that reacts to MouseEvent) and, if the scope also implements
+// OutsideClicker, forwarded to it instead. Every event is also
+// delivered to the Model as a Msg via Dispatch, at its original
+// (untranslated) coordinates, so application code can implement global
+// keys or react to absolute screen position — and, separately, to
+// whichever widget currently holds focus via its HandleEvent — see
+// Focusable and List for how their onEvent prop turns that into an
+// application Msg. It returns every Cmd produced by any of these
+// paths, for the caller to run.
 func (a *App) HandleInput(e input.Event) []Cmd {
 	if ke, ok := e.(input.KeyEvent); ok {
 		claims, releaseKey := a.rawKeyClaim()
@@ -165,7 +173,9 @@ func (a *App) HandleInput(e input.Event) []Cmd {
 		}
 	}
 
+	var cmds []Cmd
 	widgetEvent := e
+	deliverToFocused := true
 	if me, ok := e.(input.MouseEvent); ok {
 		if idx, local, found := a.hitTest(me); found {
 			if idx != a.focusIdx {
@@ -173,14 +183,24 @@ func (a *App) HandleInput(e input.Event) []Cmd {
 				a.render()
 			}
 			widgetEvent = local
+		} else if scope := findActiveFocusScope(a.root); scope != nil {
+			if ob, ok := scope.(OverlayBounds); ok {
+				if r, ok := ob.OverlayBounds(); ok && !rectContains(r, me.X, me.Y) {
+					deliverToFocused = false
+					if oc, ok := scope.(OutsideClicker); ok {
+						if cmd := oc.HandleOutsideClick(me); cmd != nil {
+							cmds = append(cmds, cmd)
+						}
+					}
+				}
+			}
 		}
 	}
 
-	var cmds []Cmd
 	if cmd := a.Dispatch(Msg(e)); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
-	if len(a.focusables) > 0 {
+	if deliverToFocused && len(a.focusables) > 0 {
 		if cmd := a.focusables[a.focusIdx].HandleEvent(widgetEvent); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -196,6 +216,11 @@ func (a *App) HandleInput(e input.Event) []Cmd {
 		a.render()
 	}
 	return cmds
+}
+
+// rectContains reports whether (x,y) falls within r.
+func rectContains(r cell.Rect, x, y int) bool {
+	return x >= r.X && x < r.X+r.W && y >= r.Y && y < r.Y+r.H
 }
 
 // hitTest reports the focusables index and translated (local-to-

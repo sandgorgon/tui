@@ -144,6 +144,20 @@ func TestCommandPaletteClaimsFocusExclusivelyWhileOpen(t *testing.T) {
 	}
 }
 
+// Dialog is Width:30, Height:8 centered in the 40x10 frame these tests
+// use throughout: x=(40-30)/2=5, y=(10-8)/2=1, so it spans
+// [5,35)x[1,9). (0,0) is well outside it.
+
+func TestCommandPaletteOutsideClickCancelsLikeEsc(t *testing.T) {
+	m := &paletteHostModel{open: true}
+	app := tui.NewApp(m, 40, 10)
+
+	handleAndRun(app, input.MouseEvent{X: 0, Y: 0, Button: input.MouseLeft})
+	if !m.cancelled {
+		t.Error("expected a click outside the palette to invoke OnCancel, same as Esc")
+	}
+}
+
 func TestCommandPaletteResetsQueryOnReopen(t *testing.T) {
 	m := &paletteHostModel{open: true}
 	app := tui.NewApp(m, 40, 10)

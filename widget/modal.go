@@ -20,6 +20,15 @@ type ModalOptions struct {
 	// exists to compute a natural size from body — see
 	// docs/DESIGN.md §3.3).
 	Width, Height int
+
+	// OnOutsideClick, if non-nil, is called when a mouse click lands
+	// outside the dialog while open (see tui.OutsideClicker) — typical
+	// use is to return a Msg that sets Open back to false, the same way
+	// a Cancel button in body would. If nil, an outside click is simply
+	// absorbed rather than misrouted into body's currently focused
+	// widget (see tui.OverlayBounds for the bug this whole mechanism
+	// exists to fix).
+	OnOutsideClick func() tui.Msg
 }
 
 // Modal is a centered dialog overlay that, while open, covers the
@@ -58,6 +67,12 @@ type modalProps struct {
 type modalWidget struct {
 	modalProps
 	content tui.Tree
+
+	// lastRect/rectSet back OverlayBounds — see its doc comment on why
+	// App needs this to tell a click outside the dialog from one
+	// inside it.
+	lastRect cell.Rect
+	rectSet  bool
 }
 
 func (w *modalWidget) Reconcile(props any) bool {
@@ -73,9 +88,11 @@ func (w *modalWidget) Paint(p *cell.Painter) {}
 
 func (w *modalWidget) PaintOverlay(p *cell.Painter) {
 	if !w.opts.Open {
+		w.rectSet = false
 		return
 	}
-	dialog := centeredOverlay(p, w.opts.Width, w.opts.Height)
+	dialog, rect := centeredOverlay(p, w.opts.Width, w.opts.Height)
+	w.lastRect, w.rectSet = rect, true
 	mw, mh := dialog.Size()
 	if mw < 2 || mh < 2 {
 		return
@@ -94,6 +111,21 @@ func (w *modalWidget) PaintOverlay(p *cell.Painter) {
 }
 
 func (w *modalWidget) HandleEvent(input.Event) tui.Cmd { return nil }
+
+// OverlayBounds reports the dialog's absolute Rect from its last
+// PaintOverlay — see tui.OverlayBounds.
+func (w *modalWidget) OverlayBounds() (cell.Rect, bool) { return w.lastRect, w.rectSet }
+
+// HandleOutsideClick implements tui.OutsideClicker.
+func (w *modalWidget) HandleOutsideClick(input.MouseEvent) tui.Cmd {
+	if w.opts.OnOutsideClick == nil {
+		return nil
+	}
+	if msg := w.opts.OnOutsideClick(); msg != nil {
+		return func() tui.Msg { return msg }
+	}
+	return nil
+}
 
 // Focusable is false: per tui.FocusScope's doc comment, Modal's own
 // *contents* become focusable while open (via Focusables below), not

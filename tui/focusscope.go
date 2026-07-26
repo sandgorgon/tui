@@ -1,6 +1,9 @@
 package tui
 
-import "github.com/sandgorgon/tui/cell"
+import (
+	"github.com/sandgorgon/tui/cell"
+	"github.com/sandgorgon/tui/input"
+)
 
 // FocusScope is implemented by a Widget that hosts its own nested
 // focus order and, while active, should claim Tab/Shift-Tab
@@ -37,6 +40,36 @@ type FocusScope interface {
 // — see Modal's doc comment (package widget) for why.
 type OverlayPainter interface {
 	PaintOverlay(p *cell.Painter)
+}
+
+// OverlayBounds is implemented by a FocusScope+OverlayPainter widget
+// that can report the absolute on-screen Rect of its own last-painted
+// overlay — e.g. Modal, CommandPalette. Without it, App.HandleInput has
+// no way to tell a click landing outside the overlay from one landing
+// inside it: hitTest never matches anything while a scope is active
+// (collectRects only walks the background tree, see its doc comment),
+// so every click, wherever it lands on screen, would otherwise reach
+// whichever of the scope's own Focusables currently holds focus with
+// raw, absolute coordinates — a real bug for a widget whose body reacts
+// to MouseEvent at all. App.HandleInput checks for this interface and
+// withholds delivery to the focused widget when the click falls outside
+// the reported bounds; see OutsideClicker for reacting to that click
+// instead of merely absorbing it.
+type OverlayBounds interface {
+	// OverlayBounds returns the absolute Rect last painted by
+	// PaintOverlay, or ok=false if nothing has been painted yet (in
+	// practice this only happens before this scope's first render,
+	// since PaintOverlay runs every frame this scope reports Active).
+	OverlayBounds() (r cell.Rect, ok bool)
+}
+
+// OutsideClicker is implemented by an active FocusScope that also wants
+// to react to a mouse click landing outside its own OverlayBounds
+// (e.g. closing the overlay) rather than just having App.HandleInput
+// silently withhold it. me is in absolute screen coordinates, the same
+// space OverlayBounds reports in.
+type OutsideClicker interface {
+	HandleOutsideClick(me input.MouseEvent) Cmd
 }
 
 // findActiveFocusScope walks r in document order for a mounted widget

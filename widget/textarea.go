@@ -176,7 +176,7 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 				r = w.buf[idx]
 			}
 			inSel := lineFullySelected || (hasSel && idx < ln.end && idx >= selStart && idx < selEnd)
-			style := highlightStyle(base, w.focused, inSel, idx == w.cursor)
+			style := highlightStyle(base, w.focused, inSel, idx == w.cursor && idx <= ln.end)
 			inner.SetCell(col, row, r, style)
 		}
 	}

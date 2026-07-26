@@ -23,6 +23,13 @@ type TextAreaOptions struct {
 	// Ctrl+Enter is pressed (plain Enter inserts a newline, unlike
 	// TextInput's Enter).
 	OnSubmit func(value string) tui.Msg
+
+	// ReleaseKey is the key that exits the field and resumes Tab/
+	// Shift-Tab focus navigation — TextArea always claims raw Tab (see
+	// tui.RawKeyClaimer) so a literal tab character can be typed, so it
+	// needs its own way out. The zero value defaults to Esc, which
+	// TextArea has no independent use for.
+	ReleaseKey input.KeyEvent
 }
 
 // TextArea is a multi-line, focusable, bordered text field with
@@ -219,6 +226,10 @@ func (w *textAreaWidget) handleKey(ke input.KeyEvent) bool {
 		w.insertRune('\n')
 		return true
 
+	case ke.Key == input.KeyTab: // reaches here at all only because WantsRawTab claims it — see ReleaseKey
+		w.insertRune('\t')
+		return true
+
 	case ke.Mod&input.ModCtrl != 0 && ke.Rune == 'z':
 		return w.applyUndo()
 	case ke.Mod&input.ModCtrl != 0 && ke.Rune == 'y':
@@ -259,3 +270,13 @@ func (w *textAreaWidget) moveVertical(delta int) {
 
 func (w *textAreaWidget) Focusable() bool         { return true }
 func (w *textAreaWidget) SetFocused(focused bool) { w.focused = focused }
+
+// WantsRawTab and ReleaseKey implement tui.RawKeyClaimer — see
+// TextAreaOptions.ReleaseKey.
+func (w *textAreaWidget) WantsRawTab() bool { return true }
+func (w *textAreaWidget) ReleaseKey() input.KeyEvent {
+	if w.opts.ReleaseKey != (input.KeyEvent{}) {
+		return w.opts.ReleaseKey
+	}
+	return input.KeyEvent{Key: input.KeyEsc}
+}

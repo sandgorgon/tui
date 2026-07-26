@@ -6,6 +6,7 @@ import (
 
 	"github.com/sandgorgon/tui/cell"
 	"github.com/sandgorgon/tui/input"
+	"github.com/sandgorgon/tui/layout"
 	"github.com/sandgorgon/tui/style"
 	"github.com/sandgorgon/tui/tui"
 )
@@ -118,6 +119,77 @@ func TestTextAreaPaintShowsMultipleLines(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("Buffer missing line %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestTextAreaTabInsertsLiteralTabCharacter(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark()})
+	app.HandleInput(input.KeyEvent{Rune: 'a'})
+	app.HandleInput(input.KeyEvent{Key: input.KeyTab})
+	app.HandleInput(input.KeyEvent{Rune: 'b'})
+
+	if *value != "a\tb" {
+		t.Errorf("value = %q, want %q (Tab should insert a literal tab, not move focus)", *value, "a\tb")
+	}
+}
+
+// textAreaAndFocusable builds a two-widget frame — a TextArea and a
+// second Focusable widget forwarding a tagged Msg — for tests that
+// need to check whether a key moved focus away from the TextArea.
+func textAreaAndFocusable(opts TextAreaOptions) (*tui.App, *string) {
+	var value string
+	opts.OnChange = func(v string) tui.Msg {
+		value = v
+		return nil
+	}
+	m := &widgetHostModel{node: tui.Box(layout.Horizontal,
+		tui.Child(layout.Fill(1), TextArea(opts)),
+		tui.Child(layout.Fill(1), tui.Focusable("other", tui.Text("other", cell.Style{}), func(e input.Event) tui.Msg { return "other" })),
+	)}
+	return tui.NewApp(m, 30, 8), &value
+}
+
+func TestTextAreaEscReleasesFocusByDefault(t *testing.T) {
+	app, value := textAreaAndFocusable(TextAreaOptions{Theme: style.DefaultDark()})
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyEsc})
+	if *value != "" {
+		t.Errorf("value = %q, want empty (Esc should release focus, not be typed into the field)", *value)
+	}
+
+	// Focus should now be on "other": pressing a key should produce
+	// its tagged Cmd, not reach the TextArea.
+	cmds := app.HandleInput(input.KeyEvent{Rune: 'x'})
+	if len(cmds) != 1 || cmds[0]() != "other" {
+		t.Fatalf("expected focus to have moved to the other widget after Esc, got cmds=%v", cmds)
+	}
+}
+
+func TestTextAreaCustomReleaseKey(t *testing.T) {
+	app, value := textAreaAndFocusable(TextAreaOptions{
+		Theme:      style.DefaultDark(),
+		ReleaseKey: input.KeyEvent{Rune: 'q', Mod: input.ModCtrl},
+	})
+
+	// Esc is no longer the release key for this instance, so it must
+	// be handled by the field itself (a no-op key for TextArea) rather
+	// than releasing focus.
+	app.HandleInput(input.KeyEvent{Key: input.KeyEsc})
+	if cmds := app.HandleInput(input.KeyEvent{Rune: 'a'}); len(cmds) != 0 {
+		t.Fatalf("expected the field still focused after Esc (not the release key here), got cmds=%v", cmds)
+	}
+	if *value != "a" {
+		t.Fatalf("value = %q, want %q (still typing into the field)", *value, "a")
+	}
+
+	// The release key itself just moves focus (like Tab) and returns no
+	// Cmd for that event — check the *next* keystroke lands on "other".
+	if cmds := app.HandleInput(input.KeyEvent{Rune: 'q', Mod: input.ModCtrl}); len(cmds) != 0 {
+		t.Fatalf("release key itself should produce no Cmd, got %v", cmds)
+	}
+	cmds := app.HandleInput(input.KeyEvent{Rune: 'x'})
+	if len(cmds) != 1 || cmds[0]() != "other" {
+		t.Fatalf("expected focus moved to \"other\" after the custom release key (Ctrl+Q), got cmds=%v", cmds)
 	}
 }
 

@@ -25,6 +25,20 @@ type TerminalOptions struct {
 	// see Terminal's doc comment for why it isn't delivered the instant
 	// the child actually exits.
 	OnExit func(err error) tui.Msg
+
+	// WantsRawTab, if true, claims Tab for the child process (e.g.
+	// shell tab-completion) instead of App's global Tab focus
+	// navigation (see tui.RawKeyClaimer) — off by default, so existing
+	// Terminal usage is unaffected. ReleaseKey is what exits the pane
+	// and resumes navigation instead; unlike TextArea, Esc is not a
+	// safe default here — a real shell or editor running inside needs
+	// Esc delivered to it (vim's insert-mode exit, readline bindings,
+	// ...) — so when WantsRawTab is true and ReleaseKey is left at its
+	// zero value, it defaults to Ctrl+\, which is rarely bound by
+	// shells or editors in practice. Set it explicitly to whatever key
+	// your application reserves for "leave this pane."
+	WantsRawTab bool
+	ReleaseKey  input.KeyEvent
 }
 
 // Terminal wires package pty (L6) and package vt (L7) together as a
@@ -219,6 +233,18 @@ func (w *terminalWidget) HandleEvent(e input.Event) tui.Cmd {
 
 func (w *terminalWidget) Focusable() bool         { return true }
 func (w *terminalWidget) SetFocused(focused bool) { w.focused = focused }
+
+// WantsRawTab and ReleaseKey implement tui.RawKeyClaimer — see
+// TerminalOptions.WantsRawTab/ReleaseKey. Tab itself, once claimed,
+// needs no special handling here: encodeEvent already encodes KeyTab
+// like any other key.
+func (w *terminalWidget) WantsRawTab() bool { return w.opts.WantsRawTab }
+func (w *terminalWidget) ReleaseKey() input.KeyEvent {
+	if w.opts.ReleaseKey != (input.KeyEvent{}) {
+		return w.opts.ReleaseKey
+	}
+	return input.KeyEvent{Rune: '\\', Mod: input.ModCtrl}
+}
 
 // Close closes the pty master, which reliably delivers SIGHUP to the
 // child (standard pty semantics) so the readLoop's own cmd.Wait()

@@ -8,8 +8,21 @@ import (
 
 	"github.com/sandgorgon/tui/cell"
 	"github.com/sandgorgon/tui/input"
+	"github.com/sandgorgon/tui/layout"
 	"github.com/sandgorgon/tui/tui"
 )
+
+// terminalAndFocusable builds a two-widget frame — a Terminal and a
+// second Focusable widget forwarding a tagged Msg — for tests that
+// need to check whether Tab/a release key moved focus away from the
+// Terminal.
+func terminalAndFocusable(opts TerminalOptions) *tui.App {
+	m := &widgetHostModel{node: tui.Box(layout.Horizontal,
+		tui.Child(layout.Fill(1), Terminal(opts)),
+		tui.Child(layout.Fill(1), tui.Focusable("other", tui.Text("other", cell.Style{}), func(e input.Event) tui.Msg { return "other" })),
+	)}
+	return tui.NewApp(m, 30, 6)
+}
 
 // waitFor polls check every 20ms until it returns true or timeout
 // elapses, calling paint before each check (Terminal's output arrives
@@ -147,6 +160,75 @@ func TestTerminalCursorShownWhenFocused(t *testing.T) {
 	}
 
 	if err := tr.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+func TestTerminalWithoutWantsRawTabStillNavigatesOnTab(t *testing.T) {
+	app := terminalAndFocusable(TerminalOptions{Command: exec.Command("cat")})
+	defer closeApp(t, app)
+
+	cmds := app.HandleInput(input.KeyEvent{Key: input.KeyTab})
+	if len(cmds) != 0 {
+		t.Fatalf("unexpected cmd from Tab: %v", cmds)
+	}
+	cmds = app.HandleInput(input.KeyEvent{Rune: 'x'})
+	if len(cmds) != 1 || cmds[0]() != "other" {
+		t.Fatalf("expected Tab to have moved focus to \"other\" (WantsRawTab is false by default), got cmds=%v", cmds)
+	}
+}
+
+func TestTerminalWantsRawTabKeepsFocusOnTab(t *testing.T) {
+	app := terminalAndFocusable(TerminalOptions{Command: exec.Command("cat"), WantsRawTab: true})
+	defer closeApp(t, app)
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyTab})
+	cmds := app.HandleInput(input.KeyEvent{Rune: 'x'})
+	if len(cmds) != 0 {
+		t.Fatalf("expected focus to remain on the Terminal after Tab (WantsRawTab is true), got cmds=%v", cmds)
+	}
+}
+
+func TestTerminalReleaseKeyDefaultsToCtrlBackslash(t *testing.T) {
+	app := terminalAndFocusable(TerminalOptions{Command: exec.Command("cat"), WantsRawTab: true})
+	defer closeApp(t, app)
+
+	if cmds := app.HandleInput(input.KeyEvent{Rune: '\\', Mod: input.ModCtrl}); len(cmds) != 0 {
+		t.Fatalf("release key itself should produce no Cmd, got %v", cmds)
+	}
+	cmds := app.HandleInput(input.KeyEvent{Rune: 'x'})
+	if len(cmds) != 1 || cmds[0]() != "other" {
+		t.Fatalf("expected Ctrl+\\ to release focus to \"other\", got cmds=%v", cmds)
+	}
+}
+
+func TestTerminalCustomReleaseKey(t *testing.T) {
+	app := terminalAndFocusable(TerminalOptions{
+		Command: exec.Command("cat"), WantsRawTab: true,
+		ReleaseKey: input.KeyEvent{Key: input.KeyF12},
+	})
+	defer closeApp(t, app)
+
+	// The default (Ctrl+\) must NOT release focus for this instance.
+	app.HandleInput(input.KeyEvent{Rune: '\\', Mod: input.ModCtrl})
+	if cmds := app.HandleInput(input.KeyEvent{Rune: 'x'}); len(cmds) != 0 {
+		t.Fatalf("expected Ctrl+\\ to have no special effect here, got cmds=%v", cmds)
+	}
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyF12})
+	cmds := app.HandleInput(input.KeyEvent{Rune: 'x'})
+	if len(cmds) != 1 || cmds[0]() != "other" {
+		t.Fatalf("expected the custom release key (F12) to move focus, got cmds=%v", cmds)
+	}
+}
+
+// closeApp closes app entirely — used by the raw-tab tests
+// above to release the Terminal's pty/goroutine, since
+// terminalAndFocusable doesn't expose the App's retained tree
+// directly the way the other tests' tui.Tree do.
+func closeApp(t *testing.T, app *tui.App) {
+	t.Helper()
+	if err := app.Close(); err != nil {
 		t.Errorf("Close: %v", err)
 	}
 }

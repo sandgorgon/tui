@@ -130,18 +130,29 @@ func (a *App) render() {
 	}
 }
 
-// HandleInput routes one decoded input.Event. Tab/Shift-Tab move focus
-// among the Focusable/List widgets found by collectFocusables and are
-// never forwarded any further. Every other event is delivered to the
+// HandleInput routes one decoded input.Event. Tab/Shift-Tab normally
+// move focus among the Focusable/List widgets found by
+// collectFocusables and are never forwarded any further — unless the
+// focused widget implements RawKeyClaimer and WantsRawTab, in which
+// case Tab goes straight to it instead (e.g. TextArea, so a literal
+// tab character can be typed) and only that widget's own declared
+// ReleaseKey moves focus onward. Every other event is delivered to the
 // Model as a Msg via Dispatch (so application code can implement
 // global keys, e.g. quit) and, separately, to whichever widget
 // currently holds focus via its HandleEvent — see Focusable and List
 // for how their onEvent prop turns that into an application Msg. It
 // returns every Cmd produced by either path, for the caller to run.
 func (a *App) HandleInput(e input.Event) []Cmd {
-	if ke, ok := e.(input.KeyEvent); ok && ke.Key == input.KeyTab {
-		a.moveFocus(ke.Mod&input.ModShift == 0)
-		return nil
+	if ke, ok := e.(input.KeyEvent); ok {
+		claims, releaseKey := a.rawKeyClaim()
+		switch {
+		case claims && ke == releaseKey:
+			a.moveFocus(true)
+			return nil
+		case !claims && ke.Key == input.KeyTab:
+			a.moveFocus(ke.Mod&input.ModShift == 0)
+			return nil
+		}
 	}
 
 	var cmds []Cmd
@@ -164,6 +175,19 @@ func (a *App) HandleInput(e input.Event) []Cmd {
 		a.render()
 	}
 	return cmds
+}
+
+// rawKeyClaim reports whether the currently focused widget implements
+// RawKeyClaimer and wants raw Tab, and if so its declared release key.
+func (a *App) rawKeyClaim() (claims bool, releaseKey input.KeyEvent) {
+	if len(a.focusables) == 0 {
+		return false, input.KeyEvent{}
+	}
+	rc, ok := a.focusables[a.focusIdx].(RawKeyClaimer)
+	if !ok || !rc.WantsRawTab() {
+		return false, input.KeyEvent{}
+	}
+	return true, rc.ReleaseKey()
 }
 
 func (a *App) moveFocus(forward bool) {

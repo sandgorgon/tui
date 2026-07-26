@@ -37,6 +37,9 @@ type retained struct {
 // position-vs-Key matching happens.
 func reconcile(prev *retained, next Node) *retained {
 	if prev == nil || prev.kind != next.kind {
+		if prev != nil {
+			disposeTree(prev)
+		}
 		prev = &retained{kind: next.kind}
 		if next.kind == kindWidget {
 			prev.widget = next.newWidget()
@@ -70,6 +73,8 @@ func reconcile(prev *retained, next Node) *retained {
 // state); an entry without a Key is matched only to the prev child at
 // the same index, and only if that prev child was itself unkeyed
 // (falling back to React-style position matching for keyless lists).
+// Any prev child left unmatched — no longer present in next at all —
+// is disposed (see dispose.go).
 func reconcileChildren(prev []*retained, next []BoxChild) []*retained {
 	byKey := make(map[any]*retained, len(prev))
 	for _, p := range prev {
@@ -79,6 +84,7 @@ func reconcileChildren(prev []*retained, next []BoxChild) []*retained {
 	}
 
 	out := make([]*retained, len(next))
+	used := make(map[*retained]bool, len(next))
 	for i, nc := range next {
 		var p *retained
 		if nc.Node.key != nil {
@@ -86,7 +92,16 @@ func reconcileChildren(prev []*retained, next []BoxChild) []*retained {
 		} else if i < len(prev) && prev[i].key == nil {
 			p = prev[i]
 		}
+		if p != nil {
+			used[p] = true
+		}
 		out[i] = reconcile(p, nc.Node)
+	}
+
+	for _, p := range prev {
+		if !used[p] {
+			disposeTree(p)
+		}
 	}
 	return out
 }
@@ -111,22 +126,35 @@ func (r *retained) paint(p *cell.Painter) {
 	}
 }
 
-// collectFocusables walks r in document order, returning every
-// kindWidget node whose Widget reports itself Focusable — the order
-// Tab/Shift-Tab cycle through (see focus.go).
-func collectFocusables(r *retained) []*retained {
+// collectFocusables returns the Focusable widgets Tab/Shift-Tab should
+// cycle through, in document order. If any mounted widget within r
+// implements FocusScope and reports Active() == true, traversal is
+// scoped exclusively to that widget's own Focusables (see FocusScope's
+// doc comment) — the first such active scope found in document order
+// wins, and everything outside it is ignored.
+func collectFocusables(r *retained) []Widget {
+	if scope := findActiveFocusScope(r); scope != nil {
+		return scope.Focusables()
+	}
+	return collectPlainFocusables(r)
+}
+
+// collectPlainFocusables is collectFocusables' unscoped case: every
+// kindWidget node whose Widget reports itself Focusable, found by
+// walking r in document order.
+func collectPlainFocusables(r *retained) []Widget {
 	if r == nil {
 		return nil
 	}
 	if r.kind == kindWidget {
 		if r.widget.Focusable() {
-			return []*retained{r}
+			return []Widget{r.widget}
 		}
 		return nil
 	}
-	var out []*retained
+	var out []Widget
 	for _, c := range r.children {
-		out = append(out, collectFocusables(c)...)
+		out = append(out, collectPlainFocusables(c)...)
 	}
 	return out
 }

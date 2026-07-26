@@ -1,0 +1,175 @@
+package widget
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/sandgorgon/tui/cell"
+	"github.com/sandgorgon/tui/input"
+	"github.com/sandgorgon/tui/style"
+	"github.com/sandgorgon/tui/tui"
+)
+
+func testColumns() []Column {
+	return []Column{{Title: "Name", Width: 6}, {Title: "Age", Width: 4}}
+}
+
+func TestTablePaintShowsHeaderAndRows(t *testing.T) {
+	rows := [][]string{{"alice", "30"}, {"bob", "25"}}
+	node := Table(testColumns(), rows, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, nil)
+	buf := cell.NewBuffer(20, 3)
+	paintNode(t, node, buf)
+
+	got := strings.Split(buf.String(), "\n")
+	if !strings.HasPrefix(got[0], "Name") || !strings.Contains(got[0], "Age") {
+		t.Errorf("header row = %q", got[0])
+	}
+	if !strings.HasPrefix(got[1], "alice") {
+		t.Errorf("row 1 = %q, want to start with \"alice\"", got[1])
+	}
+	if !strings.HasPrefix(got[2], "bob") {
+		t.Errorf("row 2 = %q, want to start with \"bob\"", got[2])
+	}
+}
+
+func TestTableSortIndicatorShownOnSortColumn(t *testing.T) {
+	// "Age" needs to be wide enough to fit its title *and* the " ▼"
+	// indicator (5 cells) — testColumns()'s width-4 Age column is
+	// intentionally too narrow for that, exercised separately by
+	// TestTableSortIndicatorTruncatedByNarrowColumn below.
+	columns := []Column{{Title: "Name", Width: 6}, {Title: "Age", Width: 6}}
+	node := Table(columns, nil, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: 1, SortDescending: true}, nil)
+	buf := cell.NewBuffer(20, 1)
+	paintNode(t, node, buf)
+
+	got := buf.String()
+	if !strings.Contains(got, "Age ▼") {
+		t.Errorf("header = %q, want descending sort arrow next to \"Age\"", got)
+	}
+	if strings.Contains(got, "Name ▲") || strings.Contains(got, "Name ▼") {
+		t.Errorf("header = %q, want no sort arrow on \"Name\"", got)
+	}
+}
+
+func TestTableSortIndicatorTruncatedByNarrowColumn(t *testing.T) {
+	// testColumns()'s "Age" column is width 4 — too narrow to fit
+	// "Age ▼" (5 cells). padTruncate enforces the column width
+	// contract unconditionally, so the indicator gets cut off along
+	// with the rest of any overlong header text; that's expected, not
+	// a bug (see TestTableSortIndicatorShownOnSortColumn for the
+	// column-wide-enough case).
+	node := Table(testColumns(), nil, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: 1, SortDescending: true}, nil)
+	buf := cell.NewBuffer(20, 1)
+	paintNode(t, node, buf)
+
+	got := strings.Split(buf.String(), "\n")[0]
+	if !strings.HasPrefix(got, "Name   Age ") {
+		t.Errorf("header = %q, want the sort arrow truncated away by the narrow column", got)
+	}
+	if strings.ContainsRune(got, '▼') {
+		t.Errorf("header = %q, the sort arrow should have been truncated away entirely", got)
+	}
+}
+
+func TestTableColumnResizeWithShiftArrows(t *testing.T) {
+	rows := [][]string{{"a", "1"}}
+	m := &widgetHostModel{node: Table(testColumns(), rows, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, nil)}
+	app := tui.NewApp(m, 20, 2)
+
+	before := app.Buffer().String()
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight, Mod: input.ModShift}) // widen column 0 ("Name")
+	after := app.Buffer().String()
+
+	if before == after {
+		t.Fatal("expected header/row layout to change after widening column 0")
+	}
+	rows2 := strings.Split(after, "\n")
+	if !strings.HasPrefix(rows2[0], "Name  ") { // one extra space from the widened column
+		t.Errorf("header after resize = %q, want a wider \"Name\" column", rows2[0])
+	}
+}
+
+func TestTableColumnResizeHasMinimumWidth(t *testing.T) {
+	m := &widgetHostModel{node: Table([]Column{{Title: "X", Width: tableMinColumnWidth}}, nil, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, nil)}
+	app := tui.NewApp(m, 10, 2)
+
+	for range 10 {
+		app.HandleInput(input.KeyEvent{Key: input.KeyLeft, Mod: input.ModShift})
+	}
+	got := strings.Split(app.Buffer().String(), "\n")[0]
+	if !strings.HasPrefix(got, "X  ") { // 3 cells: min width
+		t.Errorf("header = %q, want column clamped to the minimum width", got)
+	}
+}
+
+func TestTableLeftRightMovesCursorColumnAndHighlightsHeader(t *testing.T) {
+	m := &widgetHostModel{node: Table(testColumns(), nil, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, nil)}
+	app := tui.NewApp(m, 20, 2)
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight})
+	if got := app.Buffer().At(0, 0).Style.Underline; got != cell.UnderlineNone {
+		t.Errorf("\"Name\" header underline = %v, want none after moving cursorCol off it", got)
+	}
+	if got := app.Buffer().At(7, 0).Style.Underline; got != cell.UnderlineSingle {
+		t.Errorf("\"Age\" header underline = %v, want underlined after Right moved cursorCol onto it", got)
+	}
+}
+
+func TestTableVirtualizesRows(t *testing.T) {
+	rows := make([][]string, 50)
+	for i := range rows {
+		rows[i] = []string{string(rune('a' + i%26)), "0"}
+	}
+	node := Table(testColumns(), rows, 49, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, nil)
+	buf := cell.NewBuffer(20, 5) // header + 4 visible rows, out of 50
+	paintNode(t, node, buf)
+
+	got := buf.String()
+	if !strings.Contains(got, string(rune('a'+49%26))) {
+		t.Errorf("Buffer should scroll to keep the selected (last) row visible:\n%s", got)
+	}
+}
+
+func TestTableForwardsNonNavigationEventsThroughOnEvent(t *testing.T) {
+	var got input.Event
+	node := Table(testColumns(), nil, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, func(e input.Event) tui.Msg {
+		got = e
+		return "activated"
+	})
+
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 20, 3)
+	cmds := app.HandleInput(input.KeyEvent{Key: input.KeyEnter})
+	if len(cmds) != 1 || cmds[0]() != "activated" {
+		t.Fatalf("expected onEvent's Msg via HandleInput's Cmd, got %v", cmds)
+	}
+	if got != (input.KeyEvent{Key: input.KeyEnter}) {
+		t.Errorf("onEvent received %v", got)
+	}
+}
+
+func TestTableRetainsColumnWidthsAcrossReconcile(t *testing.T) {
+	var tr tui.Tree
+	buf := cell.NewBuffer(20, 2)
+
+	build := func() tui.Node {
+		return Table(testColumns(), nil, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, nil)
+	}
+	tr.Reconcile(build())
+	tr.Paint(cell.NewPainter(buf))
+
+	widget := tr.Focusables()[0]
+	widget.SetFocused(true) // HandleEvent doesn't require focus itself, but keep it realistic
+	widget.HandleEvent(input.KeyEvent{Key: input.KeyRight, Mod: input.ModShift})
+
+	// Reconcile a *brand new* Node built the same way Model.View()
+	// would every frame — not just repaint the same one — to prove the
+	// resize survived reconciliation, not just repeated painting.
+	tr.Reconcile(build())
+	buf2 := cell.NewBuffer(20, 2)
+	tr.Paint(cell.NewPainter(buf2))
+
+	if got := buf2.String(); !strings.HasPrefix(got, "Name  ") {
+		t.Errorf("header after reconcile = %q, want the widened \"Name\" column to have survived", got)
+	}
+}

@@ -2,6 +2,24 @@ package widget
 
 import "github.com/sandgorgon/tui/cell"
 
+// centeredOverlay returns a Painter clipped to a box of at most
+// wantW x wantH, centered within p (whose Size() is the full frame) —
+// wantW/wantH <= 0 or larger than the frame means "use the whole
+// frame". Shared by the two tui.OverlayPainter widgets in this
+// package, Modal and CommandPalette.
+func centeredOverlay(p *cell.Painter, wantW, wantH int) *cell.Painter {
+	width, height := p.Size()
+	w, h := wantW, wantH
+	if w <= 0 || w > width {
+		w = width
+	}
+	if h <= 0 || h > height {
+		h = height
+	}
+	x, y := (width-w)/2, (height-h)/2
+	return p.Clip(cell.Rect{X: x, Y: y, W: w, H: h})
+}
+
 // drawBorder paints a single-line box border in style around the
 // [0,0)-[width,height) rectangle of p, shared by every widget in this
 // package that draws its own focus border (List, Viewport) instead of

@@ -30,7 +30,7 @@ type App struct {
 	root *retained
 	buf  *cell.Buffer
 
-	focusables []*retained
+	focusables []Widget
 	focusIdx   int
 
 	initCmd Cmd
@@ -60,6 +60,16 @@ func (a *App) InitCmd() Cmd {
 // its String method) before mutating the App further if a test needs
 // to compare frames.
 func (a *App) Buffer() *cell.Buffer { return a.buf }
+
+// Close disposes the App's current Node tree (see dispose.go),
+// releasing anything any retained widget in it holds — e.g. a
+// widget.Terminal's pty and reader goroutine. Run calls this itself
+// on the way out; headless callers driving an App directly should
+// call it too once they're done with it.
+func (a *App) Close() error {
+	disposeTree(a.root)
+	return nil
+}
 
 // Dispatch feeds msg through Model.Update, re-reconciles the Node tree
 // against the resulting View(), repaints, and returns any Cmd Update
@@ -93,8 +103,8 @@ func (a *App) render() {
 	} else if a.focusIdx >= len(a.focusables) {
 		a.focusIdx = len(a.focusables) - 1
 	}
-	for i, f := range a.focusables {
-		f.widget.SetFocused(i == a.focusIdx)
+	for i, w := range a.focusables {
+		w.SetFocused(i == a.focusIdx)
 	}
 
 	// A Node tree isn't guaranteed to paint every cell every frame
@@ -106,6 +116,18 @@ func (a *App) render() {
 	// terminal state, not against this Clear.
 	a.buf.Clear(cell.Style{})
 	a.root.paint(cell.NewPainter(a.buf))
+
+	// A widget that's both the active FocusScope (e.g. an open Modal)
+	// and an OverlayPainter gets a second, full-buffer painting pass
+	// after everything else — see OverlayPainter's doc comment for why
+	// that's necessary (Box's layout.Split gives every child its own
+	// non-overlapping Rect; a modal needs to cover its siblings, not
+	// sit alongside them).
+	if scope := findActiveFocusScope(a.root); scope != nil {
+		if overlay, ok := scope.(OverlayPainter); ok {
+			overlay.PaintOverlay(cell.NewPainter(a.buf))
+		}
+	}
 }
 
 // HandleInput routes one decoded input.Event. Tab/Shift-Tab move focus
@@ -127,7 +149,7 @@ func (a *App) HandleInput(e input.Event) []Cmd {
 		cmds = append(cmds, cmd)
 	}
 	if len(a.focusables) > 0 {
-		if cmd := a.focusables[a.focusIdx].widget.HandleEvent(e); cmd != nil {
+		if cmd := a.focusables[a.focusIdx].HandleEvent(e); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 		// HandleEvent can mutate the widget's own retained state
@@ -175,6 +197,7 @@ func (a *App) Run() error {
 		return fmt.Errorf("MakeRaw: %w", err)
 	}
 	defer term.Restore(os.Stdin, saved)
+	defer a.Close()
 
 	os.Stdout.WriteString("\x1b[?1049h")
 	defer os.Stdout.WriteString("\x1b[?1049l")

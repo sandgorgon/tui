@@ -63,6 +63,24 @@ func TestViewportPgDownAndEndClampToContent(t *testing.T) {
 	}
 }
 
+func TestViewportScrollsWithMouseWheel(t *testing.T) {
+	content := linesNode([]string{"1", "2", "3", "4", "5", "6", "7", "8"})
+	m := &widgetHostModel{node: Viewport(content, 8)}
+	app := tui.NewApp(m, 3, 3)
+
+	app.HandleInput(input.MouseEvent{Button: input.MouseWheelDown})
+	want := "4  \n5  \n6  "
+	if got := app.Buffer().String(); got != want {
+		t.Errorf("Buffer after wheel down = %q, want %q", got, want)
+	}
+
+	app.HandleInput(input.MouseEvent{Button: input.MouseWheelUp})
+	want = "1  \n2  \n3  "
+	if got := app.Buffer().String(); got != want {
+		t.Errorf("Buffer after wheel up = %q, want %q", got, want)
+	}
+}
+
 func TestViewportRetainsScrollAcrossReconcile(t *testing.T) {
 	var tr tui.Tree
 	content := linesNode([]string{"a", "b", "c", "d"})

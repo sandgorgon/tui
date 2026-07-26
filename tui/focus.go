@@ -74,6 +74,14 @@ func (w *focusableWidget) HandleEvent(e input.Event) Cmd {
 func (w *focusableWidget) Focusable() bool         { return true }
 func (w *focusableWidget) SetFocused(focused bool) { w.focused = focused }
 
+// Close disposes child (see dispose.go), in case it wraps something
+// that itself needs cleanup — Focusable is otherwise a plain pass-
+// through, so it has nothing of its own to release.
+func (w *focusableWidget) Close() error {
+	disposeTree(w.child)
+	return nil
+}
+
 // drawBorder paints a single-line box border in style around the
 // [0,0)-[width,height) rectangle of p.
 func drawBorder(p *cell.Painter, width, height int, style cell.Style) {

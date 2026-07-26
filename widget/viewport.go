@@ -83,27 +83,46 @@ func (w *viewportWidget) Paint(p *cell.Painter) {
 }
 
 func (w *viewportWidget) HandleEvent(e input.Event) tui.Cmd {
-	ke, ok := e.(input.KeyEvent)
-	if !ok {
-		return nil
-	}
 	page := max(w.lastHeight, 1)
-	switch ke.Key {
-	case input.KeyUp:
-		w.scrollOffset--
-	case input.KeyDown:
-		w.scrollOffset++
-	case input.KeyPgUp:
-		w.scrollOffset -= page
-	case input.KeyPgDown:
-		w.scrollOffset += page
-	case input.KeyHome:
-		w.scrollOffset = 0
-	case input.KeyEnd:
-		w.scrollOffset = w.lastContentHeight
+	switch ev := e.(type) {
+	case input.KeyEvent:
+		switch ev.Key {
+		case input.KeyUp:
+			w.scrollOffset--
+		case input.KeyDown:
+			w.scrollOffset++
+		case input.KeyPgUp:
+			w.scrollOffset -= page
+		case input.KeyPgDown:
+			w.scrollOffset += page
+		case input.KeyHome:
+			w.scrollOffset = 0
+		case input.KeyEnd:
+			w.scrollOffset = w.lastContentHeight
+		}
+	case input.MouseEvent:
+		// Wheel scroll needs no click/hit-testing infrastructure — it
+		// targets whichever widget is already focused, the same as a
+		// key press. Click-based interaction (e.g. click a row to jump
+		// to it) is a separate, not-yet-built capability: it needs the
+		// App to track each widget's painted Rect to hit-test a
+		// MouseEvent's (X,Y) against, which nothing in this library
+		// does yet.
+		switch ev.Button {
+		case input.MouseWheelUp:
+			w.scrollOffset -= 3
+		case input.MouseWheelDown:
+			w.scrollOffset += 3
+		}
 	}
 	return nil
 }
 
 func (w *viewportWidget) Focusable() bool         { return true }
 func (w *viewportWidget) SetFocused(focused bool) {}
+
+// Close disposes content (see tui.Tree.Close), in case child wraps
+// something that itself needs cleanup.
+func (w *viewportWidget) Close() error {
+	return w.content.Close()
+}

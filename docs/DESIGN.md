@@ -300,7 +300,7 @@ rather than being a late add-on.
 | M9 | style/theme system |
 | M10 | Widgets batch 1 — structural/text: Box, Paragraph, List, Viewport, Tabs, StatusBar, ProgressBar, Spinner — golden coverage via the M5 harness |
 | M11 | Widgets batch 2 — input/data, plus formalizing M6's prototype as the proper L5 `Terminal` widget: TextInput, TextArea, Table, Tree, Select, Checkbox/Radio, Modal, CommandPalette |
-| M12 | Hardening: fuzz corpus expansion, full golden-file coverage across all widgets, benchmarks, docs, examples gallery |
+| M12 | Hardening: fuzz corpus expansion, full golden-file coverage across all widgets, benchmarks, docs, examples gallery, **mouse hit-testing** (see §9) |
 | M13 (explicitly deferred, not in v1) | Windows/ConPTY backend, image protocols, accessibility mode, terminfo db compat |
 
 ---
@@ -323,6 +323,22 @@ rather than being a late add-on.
   event loop; needs an explicit bounded-channel + coalescing policy (e.g.
   for rapid resize events) so a slow consumer can't be starved or the
   channel unbounded-grow.
+- **Mouse hit-testing is deliberately deferred to M12, not built alongside
+  M10/M11's widgets.** `input.MouseEvent` already flows through the same
+  `App.HandleInput` path as keyboard events (delivered to `Model.Update`
+  and to whichever widget currently holds focus), and a widget is free to
+  act on it directly where that needs no coordinate math — e.g.
+  `widget.Viewport` responds to wheel scroll — but nothing yet answers
+  "which widget/row is at screen position (x,y)", so click-to-focus,
+  click-a-`Table`-row, click-a-`Tabs`-label, and drag-to-resize a column
+  don't work. That needs the App to track each focusable widget's actual
+  painted `Rect` (nothing does today — `cell.Painter` is a write-only
+  drawing API with no way to ask "what did I just draw where"), which is
+  cross-cutting infrastructure, not a per-widget fix. It's most tractable
+  once every M11 widget's on-screen shape and rendering conventions are
+  settled, so M12 (Hardening) is where it belongs — bundled with that
+  milestone's other "complete what M7–M11 built" work (golden coverage,
+  benchmarks) rather than being its own milestone.
 
 ---
 

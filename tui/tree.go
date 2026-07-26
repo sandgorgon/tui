@@ -22,3 +22,20 @@ func (t *Tree) Reconcile(next Node) {
 func (t *Tree) Paint(p *cell.Painter) {
 	t.root.paint(p)
 }
+
+// Focusables returns the Focusable widgets within t's current content,
+// in document order — for a Widget that implements FocusScope by
+// hosting its content in a Tree (e.g. widget.Modal) to implement its
+// own Focusables method by delegating to this.
+func (t *Tree) Focusables() []Widget {
+	return collectFocusables(t.root)
+}
+
+// Close disposes t's current content (see dispose.go) — a Widget that
+// embeds a Tree to host child content (e.g. widget.Viewport) and holds
+// or wraps anything needing cleanup of its own should implement
+// io.Closer by delegating to this.
+func (t *Tree) Close() error {
+	disposeTree(t.root)
+	return nil
+}

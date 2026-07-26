@@ -172,7 +172,7 @@ func TestCollectFocusablesInDocumentOrder(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("collectFocusables returned %d widgets, want 2", len(got))
 	}
-	if got[0].widget != Widget(wA) || got[1].widget != Widget(wC) {
+	if got[0] != Widget(wA) || got[1] != Widget(wC) {
 		t.Error("expected only the Focusable widgets, in document order, skipping the non-focusable one")
 	}
 }

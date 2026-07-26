@@ -121,6 +121,30 @@ func (w *selectWidget) Paint(p *cell.Painter) {
 }
 
 func (w *selectWidget) HandleEvent(e input.Event) tui.Cmd {
+	if me, ok := e.(input.MouseEvent); ok {
+		row := me.Y - 1 // top border
+		switch {
+		case row == 0:
+			// The closed control (or the open list's own header line):
+			// Y=-1 is the sentinel for "this is the control, not an
+			// option" — the same convention Table uses for its header
+			// row — e.g. for toggling Open.
+			translated := me
+			translated.Y = -1
+			e = translated
+		case w.opts.Open && row >= 1:
+			idx := w.scrollOffset + (row - 1)
+			if idx < 0 || idx >= len(w.options) {
+				return nil
+			}
+			translated := me
+			translated.Y = idx
+			e = translated
+		default:
+			return nil // the border, or an option row while closed
+		}
+	}
+
 	if w.onEvent == nil {
 		return nil
 	}

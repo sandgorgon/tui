@@ -148,6 +148,77 @@ func TestTableForwardsNonNavigationEventsThroughOnEvent(t *testing.T) {
 	}
 }
 
+func TestTableClickHeaderTranslatesToColumnWithSentinelRow(t *testing.T) {
+	var got input.Event
+	node := Table(testColumns(), nil, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, func(e input.Event) tui.Msg {
+		got = e
+		return "header-clicked"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 20, 3)
+
+	// "Age" is columns[1], starting at X=7 (Name is 6 wide + 1 gap).
+	cmds := app.HandleInput(input.MouseEvent{X: 8, Y: 0, Button: input.MouseLeft})
+	if len(cmds) != 1 || cmds[0]() != "header-clicked" {
+		t.Fatalf("expected onEvent's Msg from the header click, got cmds=%v", cmds)
+	}
+	me, ok := got.(input.MouseEvent)
+	if !ok || me.X != 1 || me.Y != -1 {
+		t.Errorf("onEvent received %v, want X=1 (Age column), Y=-1 (header sentinel)", got)
+	}
+}
+
+func TestTableClickBodyRowTranslatesToRowAndColumn(t *testing.T) {
+	var got input.Event
+	rows := [][]string{{"alice", "30"}, {"bob", "25"}}
+	node := Table(testColumns(), rows, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, func(e input.Event) tui.Msg {
+		got = e
+		return "row-clicked"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 20, 3)
+
+	// Row 2 on screen (Y=2) is the second data row ("bob"); X=0 is Name.
+	cmds := app.HandleInput(input.MouseEvent{X: 0, Y: 2, Button: input.MouseLeft})
+	if len(cmds) != 1 || cmds[0]() != "row-clicked" {
+		t.Fatalf("expected onEvent's Msg from the row click, got cmds=%v", cmds)
+	}
+	me, ok := got.(input.MouseEvent)
+	if !ok || me.X != 0 || me.Y != 1 {
+		t.Errorf("onEvent received %v, want X=0 (Name column), Y=1 (\"bob\"'s row index)", got)
+	}
+}
+
+func TestTableClickInColumnGapProducesNoEvent(t *testing.T) {
+	called := false
+	node := Table(testColumns(), [][]string{{"a", "1"}}, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, func(e input.Event) tui.Msg {
+		called = true
+		return "x"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 20, 3)
+
+	app.HandleInput(input.MouseEvent{X: 6, Y: 0, Button: input.MouseLeft}) // the 1-cell gap after "Name"
+	if called {
+		t.Error("clicking the gap between columns should not forward to onEvent")
+	}
+}
+
+func TestTableClickPastLastRowProducesNoEvent(t *testing.T) {
+	called := false
+	node := Table(testColumns(), [][]string{{"a", "1"}}, 0, TableOptions{Theme: style.DefaultDark(), SortColumn: -1}, func(e input.Event) tui.Msg {
+		called = true
+		return "x"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 20, 5) // room for 4 body rows, only 1 row of data
+
+	app.HandleInput(input.MouseEvent{X: 0, Y: 3, Button: input.MouseLeft})
+	if called {
+		t.Error("clicking past the last row should not forward to onEvent")
+	}
+}
+
 func TestTableRetainsColumnWidthsAcrossReconcile(t *testing.T) {
 	var tr tui.Tree
 	buf := cell.NewBuffer(20, 2)

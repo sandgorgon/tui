@@ -183,6 +183,30 @@ func (w *tableWidget) HandleEvent(e input.Event) tui.Cmd {
 		}
 	}
 
+	if me, ok := e.(input.MouseEvent); ok {
+		col, ok := w.columnAt(me.X)
+		if !ok {
+			return nil // clicked a gap between columns
+		}
+		translated := me
+		translated.X = col
+		if me.Y == 0 {
+			// The header row: Y=-1 is the sentinel for "this is a
+			// header click, X is which column" — e.g. for toggling
+			// sort by that column. Table doesn't sort anything itself,
+			// same as everywhere else it defers to onEvent (see
+			// Table's doc comment).
+			translated.Y = -1
+		} else {
+			row, ok := w.rowAt(me.Y)
+			if !ok {
+				return nil
+			}
+			translated.Y = row
+		}
+		e = translated
+	}
+
 	if w.onEvent == nil {
 		return nil
 	}
@@ -191,6 +215,31 @@ func (w *tableWidget) HandleEvent(e input.Event) tui.Cmd {
 		return nil
 	}
 	return func() tui.Msg { return msg }
+}
+
+// columnAt translates an X coordinate local to Table's full painted
+// bounds into a column index, or ok=false if it lands in the 1-cell
+// gap between columns.
+func (w *tableWidget) columnAt(x int) (col int, ok bool) {
+	pos := 0
+	for i, cw := range w.colWidths {
+		if x >= pos && x < pos+cw {
+			return i, true
+		}
+		pos += cw + 1 // 1-cell gap, see Paint
+	}
+	return 0, false
+}
+
+// rowAt translates a Y coordinate (already known to be > 0, i.e. below
+// the header row) into a body row index, or ok=false past the last
+// row.
+func (w *tableWidget) rowAt(y int) (row int, ok bool) {
+	idx := w.scrollOffset + (y - 1)
+	if idx < 0 || idx >= len(w.rows) {
+		return 0, false
+	}
+	return idx, true
 }
 
 func (w *tableWidget) Focusable() bool         { return true }

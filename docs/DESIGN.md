@@ -300,7 +300,7 @@ rather than being a late add-on.
 | M9 | style/theme system |
 | M10 | Widgets batch 1 — structural/text: Box, Paragraph, List, Viewport, Tabs, StatusBar, ProgressBar, Spinner — golden coverage via the M5 harness |
 | M11 | Widgets batch 2 — input/data, plus formalizing M6's prototype as the proper L5 `Terminal` widget: TextInput, TextArea, Table, Tree, Select, Checkbox/Radio, Modal, CommandPalette |
-| M12 | Hardening: fuzz corpus expansion, full golden-file coverage across all widgets, benchmarks, docs, examples gallery, **mouse hit-testing** (see §9) |
+| M12 | Hardening: fuzz corpus expansion, full golden-file coverage across all widgets, benchmarks, docs, examples gallery, ~~mouse hit-testing~~ (done — see §9), **OSC 52 clipboard copy** (see §9) |
 | M13 (explicitly deferred, not in v1) | Windows/ConPTY backend, image protocols, accessibility mode, terminfo db compat |
 
 ---
@@ -323,22 +323,58 @@ rather than being a late add-on.
   event loop; needs an explicit bounded-channel + coalescing policy (e.g.
   for rapid resize events) so a slow consumer can't be starved or the
   channel unbounded-grow.
-- **Mouse hit-testing is deliberately deferred to M12, not built alongside
-  M10/M11's widgets.** `input.MouseEvent` already flows through the same
-  `App.HandleInput` path as keyboard events (delivered to `Model.Update`
-  and to whichever widget currently holds focus), and a widget is free to
-  act on it directly where that needs no coordinate math — e.g.
-  `widget.Viewport` responds to wheel scroll — but nothing yet answers
-  "which widget/row is at screen position (x,y)", so click-to-focus,
-  click-a-`Table`-row, click-a-`Tabs`-label, and drag-to-resize a column
-  don't work. That needs the App to track each focusable widget's actual
-  painted `Rect` (nothing does today — `cell.Painter` is a write-only
-  drawing API with no way to ask "what did I just draw where"), which is
-  cross-cutting infrastructure, not a per-widget fix. It's most tractable
-  once every M11 widget's on-screen shape and rendering conventions are
-  settled, so M12 (Hardening) is where it belongs — bundled with that
-  milestone's other "complete what M7–M11 built" work (golden coverage,
-  benchmarks) rather than being its own milestone.
+- **Mouse hit-testing — done (M12, first pass).** App now tracks every
+  focusable widget's absolute on-screen `Rect` as a byproduct of the
+  existing paint walk (`collectRects`, mirroring `paint`'s own
+  `layout.Split` geometry rather than needing any change to
+  `cell.Painter`, which stays write-only). `App.HandleInput` hit-tests a
+  `MouseEvent` against those rects: landing on a non-focused widget moves
+  focus there (click-to-focus), and the event forwarded to the target
+  widget has its coordinates translated to be local to that widget's
+  bounds — a widget never needs to know its own absolute screen position,
+  the same principle `cell.Painter.Clip` already uses for drawing.
+  `List`/`Tree`/`Select`'s open list/`RadioGroup`/`CheckboxGroup` translate
+  a click's Y into an item index; `Table` translates Y to a row and X to a
+  column (with Y=-1 as a header-click sentinel, X still the column —
+  `Select`'s closed control uses the same Y=-1 convention); `Tabs`
+  translates X into a label index by tracking each label's column range
+  during `Paint`. `Terminal` needed zero widget-level change: it already
+  forwards whatever event it's given straight into `encodeMouse`, and by
+  the time it sees a click the coordinates are already local — exactly
+  what a real program running inside (vim, tmux, ...) expects.
+
+  **Explicitly still out of scope, not silently dropped:**
+  - Hit-testing into `Modal`/`CommandPalette`'s `PaintOverlay` content —
+    drawn outside the normal Box tree at a computed centered position, so
+    `collectRects` doesn't see it; clicks while one is open keep routing
+    to its exclusive `FocusScope` target regardless of where they land
+    (this happens automatically, not via a special-case check: the
+    background tree's rects simply don't match any entry in
+    `App.focusables` while a scope is active). Making the overlay itself
+    position-aware (e.g. click-outside-to-close) is a real follow-up.
+  - Drag-to-resize a `Table` column via mouse — keyboard `Shift+Left/
+    Right` already covers resizing; wiring an actual click-and-drag
+    gesture is new state (which boundary is being dragged, live-updating
+    during drag) beyond this pass's click-translation work.
+  - Click-to-position-cursor and click/drag-to-select text in
+    `TextInput`/`TextArea` — real extra complexity (coordinate math
+    through the field's own horizontal/vertical scroll, plus new
+    selection-range state) distinct from the row/tab/column index
+    translation every other widget in this pass needed.
+- **Mouse reporting and native terminal text selection are mutually
+  exclusive by protocol** — enabling mouse mode (`\x1b[?1000h\x1b[?1006h`,
+  see `examples/rawecho`'s `enableMouse`) is exactly what makes click-to-
+  focus etc. possible, but it also means click-drag stops reaching the
+  terminal emulator's own selection/copy behavior; the universal escape
+  hatch is the terminal's own bypass modifier (Shift-drag, on virtually
+  every emulator), not something this library can restore — the same
+  tradeoff vim/tmux/htop-with-mouse-on already live with. **OSC 52
+  clipboard copy**, added to M12 alongside mouse hit-testing, is the
+  complementary answer for the common case this conflict actually
+  blocks: an app-initiated "copy" action (e.g. a keybinding on
+  `Table`/`List`/`Tree` to copy the selected row/cell/path) that writes
+  straight to the system clipboard via the OSC 52 escape sequence,
+  sidestepping drag-select entirely rather than trying to preserve it.
 
 ---
 

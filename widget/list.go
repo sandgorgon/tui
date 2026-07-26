@@ -110,6 +110,16 @@ func (w *listWidget) Paint(p *cell.Painter) {
 }
 
 func (w *listWidget) HandleEvent(e input.Event) tui.Cmd {
+	if me, ok := e.(input.MouseEvent); ok {
+		idx, ok := w.itemAt(me.Y)
+		if !ok {
+			return nil // clicked the border or past the last item — no target
+		}
+		translated := me
+		translated.Y = idx // Y becomes the clicked item's index, not a pixel row
+		e = translated
+	}
+
 	if w.onEvent == nil {
 		return nil
 	}
@@ -118,6 +128,22 @@ func (w *listWidget) HandleEvent(e input.Event) tui.Cmd {
 		return nil
 	}
 	return func() tui.Msg { return msg }
+}
+
+// itemAt translates a MouseEvent's Y — local to List's full painted
+// bounds, border included, per App's hit-testing (see tui.App.hitTest)
+// — into an item index, or ok=false if it lands on the border or past
+// the last item.
+func (w *listWidget) itemAt(y int) (idx int, ok bool) {
+	row := y - 1 // top border
+	if row < 0 {
+		return 0, false
+	}
+	idx = w.scrollOffset + row
+	if idx < 0 || idx >= len(w.items) {
+		return 0, false
+	}
+	return idx, true
 }
 
 func (w *listWidget) Focusable() bool         { return true }

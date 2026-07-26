@@ -30,7 +30,15 @@ type tabsProps struct {
 type tabsWidget struct {
 	tabsProps
 	focused bool
+	// ranges is each label's [start,end) column range from the last
+	// Paint, for HandleEvent to hit-test a click's X against (see
+	// tabAt) — the same "computed during Paint, used by a later
+	// HandleEvent" pattern List/Table use for their own row/column
+	// math.
+	ranges []tabRange
 }
+
+type tabRange struct{ start, end int }
 
 func (w *tabsWidget) Reconcile(props any) bool {
 	w.tabsProps = props.(tabsProps)
@@ -43,6 +51,7 @@ func (w *tabsWidget) Paint(p *cell.Painter) {
 		return
 	}
 
+	w.ranges = make([]tabRange, len(w.labels))
 	col := 0
 	for i, label := range w.labels {
 		text := " " + label + " "
@@ -57,11 +66,23 @@ func (w *tabsWidget) Paint(p *cell.Painter) {
 			tabStyle = w.theme.MutedText()
 		}
 
+		start := col
 		col += p.Text(col, 0, text, tabStyle)
+		w.ranges[i] = tabRange{start, col}
 	}
 }
 
 func (w *tabsWidget) HandleEvent(e input.Event) tui.Cmd {
+	if me, ok := e.(input.MouseEvent); ok {
+		idx, ok := w.tabAt(me.X)
+		if !ok {
+			return nil // clicked the empty space past the last label
+		}
+		translated := me
+		translated.X = idx
+		e = translated
+	}
+
 	if w.onEvent == nil {
 		return nil
 	}
@@ -70,6 +91,17 @@ func (w *tabsWidget) HandleEvent(e input.Event) tui.Cmd {
 		return nil
 	}
 	return func() tui.Msg { return msg }
+}
+
+// tabAt translates an X coordinate local to Tabs' full painted bounds
+// into a label index, using the ranges recorded by the last Paint.
+func (w *tabsWidget) tabAt(x int) (idx int, ok bool) {
+	for i, r := range w.ranges {
+		if x >= r.start && x < r.end {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func (w *tabsWidget) Focusable() bool         { return true }

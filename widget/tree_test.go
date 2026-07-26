@@ -62,6 +62,42 @@ func TestTreeForwardsEventsThroughOnEvent(t *testing.T) {
 	}
 }
 
+func TestTreeClickTranslatesToRowIndex(t *testing.T) {
+	var got input.Event
+	rows := []TreeRow{{Label: "a"}, {Label: "b"}, {Label: "c"}}
+	node := Tree(rows, 0, style.DefaultDark(), func(e input.Event) tui.Msg {
+		got = e
+		return "clicked"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 10, 3) // Tree has no border, unlike List — row 0 is the first item
+
+	cmds := app.HandleInput(input.MouseEvent{X: 2, Y: 1, Button: input.MouseLeft})
+	if len(cmds) != 1 || cmds[0]() != "clicked" {
+		t.Fatalf("expected onEvent's Msg from the click, got cmds=%v", cmds)
+	}
+	me, ok := got.(input.MouseEvent)
+	if !ok || me.Y != 1 {
+		t.Errorf("onEvent received %v, want MouseEvent with Y=1 (row index for \"b\")", got)
+	}
+}
+
+func TestTreeClickPastLastRowProducesNoEvent(t *testing.T) {
+	called := false
+	rows := []TreeRow{{Label: "only"}}
+	node := Tree(rows, 0, style.DefaultDark(), func(e input.Event) tui.Msg {
+		called = true
+		return "x"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 10, 5)
+
+	app.HandleInput(input.MouseEvent{X: 2, Y: 3, Button: input.MouseLeft})
+	if called {
+		t.Error("clicking past the last row should not forward to onEvent")
+	}
+}
+
 func TestTreeRetainsScrollOffsetAcrossReconcile(t *testing.T) {
 	rows := make([]TreeRow, 20)
 	for i := range rows {

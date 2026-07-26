@@ -87,6 +87,84 @@ func TestListForwardsEventsThroughOnEvent(t *testing.T) {
 	}
 }
 
+func TestListClickTranslatesToItemIndex(t *testing.T) {
+	var got input.Event
+	node := List([]string{"apple", "banana", "cherry"}, 0, ListOptions{Theme: style.DefaultDark()}, func(e input.Event) tui.Msg {
+		got = e
+		return "clicked"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 12, 5) // border(1) + 3 rows + border(1) = 5
+
+	// Row 2 (local y=2) is "banana" (border at y=0, "apple" at y=1).
+	cmds := app.HandleInput(input.MouseEvent{X: 3, Y: 2, Button: input.MouseLeft})
+	if len(cmds) != 1 || cmds[0]() != "clicked" {
+		t.Fatalf("expected onEvent's Msg from the click, got cmds=%v", cmds)
+	}
+	me, ok := got.(input.MouseEvent)
+	if !ok || me.Y != 1 {
+		t.Errorf("onEvent received %v, want MouseEvent with Y=1 (item index for \"banana\")", got)
+	}
+}
+
+func TestListClickOnBorderProducesNoEvent(t *testing.T) {
+	called := false
+	node := List([]string{"a", "b"}, 0, ListOptions{Theme: style.DefaultDark()}, func(e input.Event) tui.Msg {
+		called = true
+		return "x"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 10, 4)
+
+	app.HandleInput(input.MouseEvent{X: 3, Y: 0, Button: input.MouseLeft}) // top border row
+	if called {
+		t.Error("clicking the border should not forward to onEvent")
+	}
+}
+
+func TestListClickPastLastItemProducesNoEvent(t *testing.T) {
+	called := false
+	node := List([]string{"only-one"}, 0, ListOptions{Theme: style.DefaultDark()}, func(e input.Event) tui.Msg {
+		called = true
+		return "x"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 10, 5) // room for 3 item rows, only 1 item
+
+	app.HandleInput(input.MouseEvent{X: 3, Y: 2, Button: input.MouseLeft}) // row 2 -> item index 1, out of range
+	if called {
+		t.Error("clicking past the last item should not forward to onEvent")
+	}
+}
+
+func TestListClickAccountsForScrollOffset(t *testing.T) {
+	items := make([]string, 20)
+	for i := range items {
+		items[i] = string(rune('a' + i))
+	}
+	var got input.Event
+	node := List(items, 19, ListOptions{Theme: style.DefaultDark()}, func(e input.Event) tui.Msg {
+		got = e
+		return "clicked"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 10, 6) // cursor starts at the end, forcing scroll
+
+	// Whatever local row 1 shows now (after scrolling to keep item 19
+	// visible) should map back to the correct absolute item index.
+	app.HandleInput(input.MouseEvent{X: 2, Y: 1, Button: input.MouseLeft})
+	me, ok := got.(input.MouseEvent)
+	if !ok {
+		t.Fatalf("expected a MouseEvent, got %T", got)
+	}
+	if me.Y < 0 || me.Y >= len(items) {
+		t.Fatalf("translated item index %d out of range", me.Y)
+	}
+	if me.Y == 1 {
+		t.Error("item index should reflect the scrolled position, not the raw local row (list is scrolled near the end)")
+	}
+}
+
 // widgetHostModel is a minimal tui.Model that always shows a single
 // widget Node, for tests that need a real App (e.g. to exercise focus,
 // which requires App's focus tracking — Tree alone doesn't have it).

@@ -61,3 +61,37 @@ func TestCheckboxGroupForwardsEventsThroughOnEvent(t *testing.T) {
 		t.Errorf("onEvent received %v", got)
 	}
 }
+
+func TestCheckboxGroupClickForwardsOptionIndexAsIs(t *testing.T) {
+	var got input.Event
+	node := CheckboxGroup([]string{"a", "b", "c"}, []bool{false, false, false}, 0, style.DefaultDark(), func(e input.Event) tui.Msg {
+		got = e
+		return "clicked"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 10, 3)
+
+	cmds := app.HandleInput(input.MouseEvent{X: 1, Y: 2, Button: input.MouseLeft})
+	if len(cmds) != 1 || cmds[0]() != "clicked" {
+		t.Fatalf("expected onEvent's Msg from the click, got cmds=%v", cmds)
+	}
+	me, ok := got.(input.MouseEvent)
+	if !ok || me.Y != 2 {
+		t.Errorf("onEvent received %v, want Y=2 (\"c\"'s index; no border to offset by)", got)
+	}
+}
+
+func TestCheckboxGroupClickPastLastOptionProducesNoEvent(t *testing.T) {
+	called := false
+	node := CheckboxGroup([]string{"only"}, []bool{false}, 0, style.DefaultDark(), func(e input.Event) tui.Msg {
+		called = true
+		return "x"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 10, 3)
+
+	app.HandleInput(input.MouseEvent{X: 1, Y: 2, Button: input.MouseLeft})
+	if called {
+		t.Error("clicking past the last option should not forward to onEvent")
+	}
+}

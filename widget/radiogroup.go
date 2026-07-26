@@ -64,6 +64,14 @@ func (w *radioGroupWidget) Paint(p *cell.Painter) {
 }
 
 func (w *radioGroupWidget) HandleEvent(e input.Event) tui.Cmd {
+	// RadioGroup draws no border and doesn't scroll, unlike List — a
+	// MouseEvent's Y (local to the widget's full bounds, per App's
+	// hit-testing) is already the option index with no translation
+	// needed; only bounds-check it.
+	if me, ok := e.(input.MouseEvent); ok && (me.Y < 0 || me.Y >= len(w.options)) {
+		return nil
+	}
+
 	if w.onEvent == nil {
 		return nil
 	}

@@ -40,3 +40,39 @@ func TestTabsForwardsEventsThroughOnEvent(t *testing.T) {
 		t.Errorf("onEvent received %v", got)
 	}
 }
+
+func TestTabsClickTranslatesToLabelIndex(t *testing.T) {
+	var got input.Event
+	node := Tabs([]string{"one", "two", "three"}, 0, style.DefaultDark(), func(e input.Event) tui.Msg {
+		got = e
+		return "clicked"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 25, 1)
+
+	// Labels render " one " (5 wide), " two " (5 wide), " three " (7
+	// wide): "two" occupies columns [5,10).
+	cmds := app.HandleInput(input.MouseEvent{X: 6, Y: 0, Button: input.MouseLeft})
+	if len(cmds) != 1 || cmds[0]() != "clicked" {
+		t.Fatalf("expected onEvent's Msg from the click, got cmds=%v", cmds)
+	}
+	me, ok := got.(input.MouseEvent)
+	if !ok || me.X != 1 {
+		t.Errorf("onEvent received %v, want X=1 (\"two\"'s index)", got)
+	}
+}
+
+func TestTabsClickPastLastLabelProducesNoEvent(t *testing.T) {
+	called := false
+	node := Tabs([]string{"one"}, 0, style.DefaultDark(), func(e input.Event) tui.Msg {
+		called = true
+		return "x"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 25, 1)
+
+	app.HandleInput(input.MouseEvent{X: 20, Y: 0, Button: input.MouseLeft})
+	if called {
+		t.Error("clicking past the last label should not forward to onEvent")
+	}
+}

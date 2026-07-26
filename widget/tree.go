@@ -108,6 +108,16 @@ func (w *treeWidget) Paint(p *cell.Painter) {
 }
 
 func (w *treeWidget) HandleEvent(e input.Event) tui.Cmd {
+	if me, ok := e.(input.MouseEvent); ok {
+		idx := w.scrollOffset + me.Y // Tree draws no border, unlike List — row 0 is the first row
+		if idx < 0 || idx >= len(w.rows) {
+			return nil
+		}
+		translated := me
+		translated.Y = idx
+		e = translated
+	}
+
 	if w.onEvent == nil {
 		return nil
 	}

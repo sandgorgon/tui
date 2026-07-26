@@ -68,6 +68,14 @@ func (w *checkboxGroupWidget) Paint(p *cell.Painter) {
 }
 
 func (w *checkboxGroupWidget) HandleEvent(e input.Event) tui.Cmd {
+	// CheckboxGroup draws no border and doesn't scroll, unlike List — a
+	// MouseEvent's Y (local to the widget's full bounds, per App's
+	// hit-testing) is already the option index with no translation
+	// needed; only bounds-check it.
+	if me, ok := e.(input.MouseEvent); ok && (me.Y < 0 || me.Y >= len(w.options)) {
+		return nil
+	}
+
 	if w.onEvent == nil {
 		return nil
 	}

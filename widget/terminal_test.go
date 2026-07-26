@@ -77,6 +77,37 @@ func TestTerminalHandleEventWritesToChild(t *testing.T) {
 	}
 }
 
+// TestTerminalMouseEventsForwardLocalCoordinates confirms Terminal
+// needs no widget-level change for App's mouse hit-testing to work:
+// it already forwards whatever input.Event it's given straight into
+// encodeMouse, and App has already translated a click's coordinates to
+// be local to Terminal's own bounds by the time HandleEvent sees it
+// (see tui.App.hitTest) — exactly what a real program running inside
+// (vim, tmux, ...) expects: mouse coordinates relative to its own
+// pane, not the outer screen.
+//
+// "cat -v" (not plain "cat") is used deliberately: it renders control
+// bytes as visible caret notation (ESC becomes "^[") instead of our
+// own vt.Parser interpreting the echoed escape sequence as a real
+// mouse report, which — since it's a valid CSI sequence — wouldn't
+// produce any visible text to assert against at all.
+func TestTerminalMouseEventsForwardLocalCoordinates(t *testing.T) {
+	m := &widgetHostModel{node: tui.Box(layout.Horizontal,
+		tui.Child(layout.Length(5), tui.Text("spacer", cell.Style{})),
+		tui.Child(layout.Fill(1), Terminal(TerminalOptions{Command: exec.Command("cat", "-v")})),
+	)}
+	app := tui.NewApp(m, 30, 6)
+	defer closeApp(t, app)
+
+	// Absolute (7,1): the Terminal pane starts at absolute X=5, so this
+	// should reach it as local (2,1) — encoded as SGR X=3,Y=2 (1-based).
+	app.HandleInput(input.MouseEvent{X: 7, Y: 1, Button: input.MouseLeft})
+
+	waitFor(t, 2*time.Second, func() { app.Dispatch("noop") }, func() bool {
+		return strings.Contains(app.Buffer().String(), "^[[<0;3;2M")
+	})
+}
+
 func TestTerminalOnExitFiresFromHandleEvent(t *testing.T) {
 	var exitErr error
 	var exitSeen bool

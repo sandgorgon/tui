@@ -32,6 +32,7 @@ type App struct {
 
 	focusables []Widget
 	focusIdx   int
+	rects      map[Widget]cell.Rect // absolute on-screen bounds of each focusable, see hittest.go
 
 	initCmd Cmd
 }
@@ -98,6 +99,9 @@ func (a *App) render() {
 	a.root = reconcile(a.root, a.model.View())
 	a.focusables = collectFocusables(a.root)
 
+	a.rects = make(map[Widget]cell.Rect, len(a.focusables))
+	collectRects(a.root, cell.Rect{W: a.buf.Width, H: a.buf.Height}, a.rects)
+
 	if len(a.focusables) == 0 {
 		a.focusIdx = 0
 	} else if a.focusIdx >= len(a.focusables) {
@@ -136,9 +140,15 @@ func (a *App) render() {
 // focused widget implements RawKeyClaimer and WantsRawTab, in which
 // case Tab goes straight to it instead (e.g. TextArea, so a literal
 // tab character can be typed) and only that widget's own declared
-// ReleaseKey moves focus onward. Every other event is delivered to the
-// Model as a Msg via Dispatch (so application code can implement
-// global keys, e.g. quit) and, separately, to whichever widget
+// ReleaseKey moves focus onward. A MouseEvent landing inside a
+// tracked widget's bounds (see hitTest) moves focus there first
+// (click-to-focus) and is forwarded with its coordinates translated
+// to be local to that widget, so a widget never needs to know its own
+// absolute screen position — the same principle cell.Painter.Clip
+// already uses for drawing. Every event is also delivered to the
+// Model as a Msg via Dispatch, at its original (untranslated)
+// coordinates, so application code can implement global keys or react
+// to absolute screen position — and, separately, to whichever widget
 // currently holds focus via its HandleEvent — see Focusable and List
 // for how their onEvent prop turns that into an application Msg. It
 // returns every Cmd produced by either path, for the caller to run.
@@ -155,12 +165,23 @@ func (a *App) HandleInput(e input.Event) []Cmd {
 		}
 	}
 
+	widgetEvent := e
+	if me, ok := e.(input.MouseEvent); ok {
+		if idx, local, found := a.hitTest(me); found {
+			if idx != a.focusIdx {
+				a.focusIdx = idx
+				a.render()
+			}
+			widgetEvent = local
+		}
+	}
+
 	var cmds []Cmd
 	if cmd := a.Dispatch(Msg(e)); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	if len(a.focusables) > 0 {
-		if cmd := a.focusables[a.focusIdx].HandleEvent(e); cmd != nil {
+		if cmd := a.focusables[a.focusIdx].HandleEvent(widgetEvent); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 		// HandleEvent can mutate the widget's own retained state
@@ -175,6 +196,26 @@ func (a *App) HandleInput(e input.Event) []Cmd {
 		a.render()
 	}
 	return cmds
+}
+
+// hitTest reports the focusables index and translated (local-to-
+// widget) coordinates for a MouseEvent landing on a tracked focusable
+// widget's bounds, or found=false if it lands on nothing tracked —
+// the background, a non-focusable widget (its Rect was never
+// recorded), or, while a FocusScope is active, anything at all (see
+// collectRects's doc comment on why that degrades safely rather than
+// needing an explicit check here).
+func (a *App) hitTest(me input.MouseEvent) (idx int, local input.MouseEvent, found bool) {
+	for i, w := range a.focusables {
+		r, ok := a.rects[w]
+		if !ok || me.X < r.X || me.X >= r.X+r.W || me.Y < r.Y || me.Y >= r.Y+r.H {
+			continue
+		}
+		local = me
+		local.X, local.Y = me.X-r.X, me.Y-r.Y
+		return i, local, true
+	}
+	return 0, input.MouseEvent{}, false
 }
 
 // rawKeyClaim reports whether the currently focused widget implements

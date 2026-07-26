@@ -183,11 +183,44 @@ func TestTerminalCursorShownWhenFocused(t *testing.T) {
 	tr.Paint(cell.NewPainter(buf))
 
 	// A fresh cat process's screen starts with the cursor at (0,0);
-	// the cell there should have AttrReverse toggled on to represent
+	// the cell there should have AttrReverse forced on to represent
 	// it (see Terminal.Paint).
 	got := buf.At(0, 0).Style.Attr & cell.AttrReverse
 	if got == 0 {
 		t.Error("expected the cursor cell to have AttrReverse set while focused")
+	}
+
+	if err := tr.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+// TestTerminalCursorStaysVisibleOverReverseVideoContent guards against
+// a real bug: Paint used to XOR AttrReverse onto the cursor cell, which
+// canceled the attribute back off (making the cursor invisible, blending
+// into the surrounding reverse-video text) whenever the child program
+// had already drawn that cell in reverse video itself — e.g. vim visual
+// mode, less's search highlighting, or a status line. Forcing the bit on
+// (OR, not XOR) fixes it.
+func TestTerminalCursorStaysVisibleOverReverseVideoContent(t *testing.T) {
+	node := Terminal(TerminalOptions{Command: exec.Command("sh", "-c", "printf '\\033[7m \\033[0m\\033[H'; cat")})
+	buf := cell.NewBuffer(10, 3)
+	var tr tui.Tree
+	tr.Reconcile(node)
+
+	// Wait for the child's reverse-video cell (and cursor-home) to land
+	// before focusing, so the assertion below isn't racing startup.
+	waitFor(t, 2*time.Second, func() { tr.Paint(cell.NewPainter(buf)) }, func() bool {
+		return buf.At(0, 0).Style.Attr&cell.AttrReverse != 0
+	})
+
+	widget := tr.Focusables()[0]
+	widget.SetFocused(true)
+	tr.Paint(cell.NewPainter(buf))
+
+	got := buf.At(0, 0).Style.Attr & cell.AttrReverse
+	if got == 0 {
+		t.Error("cursor cell lost AttrReverse over already-reverse-video content — cursor is invisible")
 	}
 
 	if err := tr.Close(); err != nil {

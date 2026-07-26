@@ -193,7 +193,7 @@ func (w *terminalWidget) Paint(p *cell.Painter) {
 	if w.focused && !w.exited {
 		if cx, cy, visible := w.screen.Cursor(); visible && cx < width && cy < height {
 			c := src.At(cx, cy)
-			c.Style.Attr ^= cell.AttrReverse
+			c.Style.Attr |= cell.AttrReverse
 			p.SetRawCell(cx, cy, c)
 		}
 	}

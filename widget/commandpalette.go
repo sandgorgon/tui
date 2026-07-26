@@ -172,7 +172,7 @@ func (w *commandPaletteWidget) paintQueryLine(p *cell.Painter, width int, bg cel
 	for col := 0; col < width && col < len(w.buf); col++ {
 		style := bg
 		if col == w.cursor {
-			style = cell.Style{Fg: bg.Fg, Bg: bg.Bg, Attr: cell.AttrReverse}
+			style = cell.Style{Fg: bg.Fg, Bg: bg.Bg, Attr: bg.Attr | cell.AttrReverse}
 		}
 		p.SetCell(col, 0, w.buf[col], style)
 	}

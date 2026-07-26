@@ -21,6 +21,33 @@ func handleAndRun(app *tui.App, e input.Event) {
 	}
 }
 
+// TestCommandPaletteQueryCursorPreservesBgAttr guards against a real
+// (if currently dormant) inconsistency: paintQueryLine used to build the
+// query cursor's style as `cell.Style{Fg, Bg, Attr: cell.AttrReverse}`,
+// clobbering whatever Attr bg already carried instead of ORing it in —
+// unlike every other selected/cursor style in the package (List, Table,
+// Tree, Select, CheckboxGroup, editBuffer's own highlightStyle, and
+// this same file's result-row `selected` style two lines below).
+// style.Theme.Text() happens to always return Attr: 0 today, which is
+// why this never produced a visible bug, but the widget itself must not
+// assume that — it takes bg as a plain cell.Style parameter, not a
+// Theme, so it should preserve whatever Attr the caller passes in.
+func TestCommandPaletteQueryCursorPreservesBgAttr(t *testing.T) {
+	w := &commandPaletteWidget{}
+	w.buf = []rune("ab")
+	w.cursor = 1
+
+	buf := cell.NewBuffer(5, 1)
+	bg := cell.Style{Attr: cell.AttrBold}
+	w.paintQueryLine(cell.NewPainter(buf), 5, bg)
+
+	got := buf.At(1, 0).Style.Attr
+	want := cell.AttrBold | cell.AttrReverse
+	if got != want {
+		t.Errorf("cursor cell Attr = %v, want %v (bg.Attr ORed with AttrReverse, not clobbered)", got, want)
+	}
+}
+
 func testCommands() []Command {
 	return []Command{
 		{Label: "Open File", Data: 1},

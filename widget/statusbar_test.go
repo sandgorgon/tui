@@ -45,6 +45,32 @@ func TestStatusBarFillsBackground(t *testing.T) {
 	}
 }
 
+// TestStatusBarCenterDoesNotOverwriteRightWhenTooWide guards against a
+// real bug: center is painted last and, when its own width doesn't fit
+// the gap between left and right, the old clamp math collapsed its
+// start position all the way to leftEnd and let it paint straight
+// through into right's already-drawn cells. Setup: width=10, left width
+// 2 ("LL"), right width 2 ("RR") leaves a 6-column gap, but center is 8
+// columns wide ("ABCDEFGH") — center cannot possibly fit, so it must be
+// truncated rather than spill into and overwrite "RR".
+func TestStatusBarCenterDoesNotOverwriteRightWhenTooWide(t *testing.T) {
+	left := []Segment{{Text: "LL"}}
+	right := []Segment{{Text: "RR"}}
+	center := []Segment{{Text: "ABCDEFGH"}}
+
+	node := StatusBar(left, center, right, cell.Style{})
+	buf := cell.NewBuffer(10, 1)
+	paintNode(t, node, buf)
+
+	got := buf.String()
+	if !strings.HasSuffix(got, "RR") {
+		t.Errorf("Buffer = %q, want right segment (\"RR\") intact at the end (center must not overwrite it)", got)
+	}
+	if !strings.HasPrefix(got, "LL") {
+		t.Errorf("Buffer = %q, want left segment (\"LL\") intact at the start", got)
+	}
+}
+
 func TestStatusBarSegmentBgIsOverriddenByBarBackground(t *testing.T) {
 	bg := cell.Style{Bg: cell.ANSIColor(2)}
 	left := []Segment{{Text: "x", Style: cell.Style{Fg: cell.ANSIColor(1), Bg: cell.ANSIColor(9)}}}

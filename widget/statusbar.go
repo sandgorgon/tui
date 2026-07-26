@@ -72,10 +72,18 @@ func (w *statusBarWidget) Paint(p *cell.Painter) {
 	}
 	centerStart := (width - centerWidth) / 2
 	centerStart = max(centerStart, leftEnd)
-	centerStart = min(centerStart, max(rightStart-centerWidth, leftEnd))
-	col = centerStart
+	centerStart = min(centerStart, rightStart-centerWidth)
+	centerStart = max(centerStart, leftEnd)
+
+	// Center is painted last and would otherwise be free to overwrite
+	// right's already-painted cells whenever centerWidth doesn't fit in
+	// the [leftEnd, rightStart) gap (e.g. a long message with a narrow
+	// bar) — clip it to that gap so it's silently truncated instead.
+	gap := max(rightStart-leftEnd, 0)
+	centerPainter := p.Clip(cell.Rect{X: leftEnd, Y: 0, W: gap, H: height})
+	col = centerStart - leftEnd
 	for _, seg := range w.center {
-		col += p.Text(col, 0, seg.Text, w.styled(seg))
+		col += centerPainter.Text(col, 0, seg.Text, w.styled(seg))
 	}
 }
 

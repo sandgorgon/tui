@@ -74,6 +74,10 @@ returns a `Cmd` that yields `tui.Quit()`. See `examples/todo` for a
 complete Model with focus traversal and a retained `List` widget, and
 `examples/gallery` for the full widget catalog exercised in one app.
 
+New to the library? [`docs/GUIDE.md`](docs/GUIDE.md) walks through the
+concepts above in more depth — Model/Update/View, Msg/Cmd, layout
+constraints, retained widgets, and how input routing works.
+
 ## Design
 
 The full architecture — layering, the component model, the PTY and VT

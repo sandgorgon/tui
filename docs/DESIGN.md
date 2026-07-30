@@ -323,23 +323,22 @@ rather than being a late add-on.
   event loop; needs an explicit bounded-channel + coalescing policy (e.g.
   for rapid resize events) so a slow consumer can't be starved or the
   channel unbounded-grow.
-- **macOS: CI-verified on real hardware, not yet interactively (resolved
-  2026-07-26, was open as of M12).** `pty/pty_darwin.go` and
-  `term/term_darwin.go`'s ioctl constants and struct layouts
+- **macOS: unverified, CI leg removed (2026-07-30).** `pty/pty_darwin.go`
+  and `term/term_darwin.go`'s ioctl constants and struct layouts
   (`TIOCPTYGRANT`/`TIOCPTYUNLK`/`TIOCPTYGNAME`, termios field positions,
   `tcflag_t` width — see §6, §3.4) were transcribed from
   `golang.org/x/sys/unix`'s canonical source at M1/M3, not developed
-  against a real Mac — this project has been developed entirely on
-  Linux. Once the repo was pushed to GitHub (`github.com/sandgorgon/tui`)
-  with Actions enabled, the first push's CI run passed in full — build,
-  `go vet`, `test -race`, and the fuzz smoke run — on `macos-latest`,
-  a real (GitHub-hosted) Mac runner, confirming the ioctl/struct layout
-  transcription is correct on real Darwin, not just cross-compilable.
-  What's still open: nobody has driven this interactively on a Mac (a
-  real terminal session attaching a shell/`vim`/`htop` through a
-  `Terminal` widget) — CI's test suite doesn't cover that end-to-end
-  "does it actually feel right in a real terminal emulator" experience
-  the way the Linux development process did throughout M1-M12.
+  against a real Mac — this project is developed and maintained entirely
+  on Linux, and nobody on the project has Mac hardware. CI briefly ran a
+  `macos-latest` matrix leg (added when the repo went public, 2026-07-26)
+  and it passed on the first run — build, `go vet`, `test -race`, fuzz
+  smoke, on a real GitHub-hosted Mac runner — but it was removed on
+  2026-07-30: a green CI checkmark with no one able to diagnose a future
+  Mac-specific failure is false confidence, not real coverage. Darwin
+  support should be treated as cross-compiles-only/unverified until
+  someone with real Mac hardware can test and maintain it. Nobody has
+  ever driven this interactively on a Mac (a real terminal session
+  attaching a shell/`vim`/`htop` through a `Terminal` widget) either.
   Verification from a contributor with real Mac access closes that
   remaining gap; nothing else is required to trust the ioctl layer
   itself anymore.

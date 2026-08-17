@@ -1,9 +1,15 @@
 # Proposal: PageUp/PageDown, buffer-start/end, and word-jump for TextArea
 
-Status: proposal, not accepted. Filed by a consumer (kaze) for
-consideration whenever this repo's own maintainer picks it up — not a
-commitment to build it, and not built here. Same spirit as the earlier
+Status: **accepted and implemented**, `4aff529` on `develop`, released
+as `v0.1.6`. Originally filed by a consumer (kaze) for consideration
+whenever this repo's own maintainer picks it up — not a commitment to
+build it at the time. Same spirit as the earlier
 `text-region-styling.md` proposal this repo already merged (`02a0538`).
+All three additions landed exactly as proposed: Ctrl+Home/Ctrl+End,
+Ctrl+Left/Ctrl+Right word-jump, and PageUp/PageDown (backed by a new
+`lastVisibleLines` field on `textAreaWidget`, as anticipated in point 3
+below). Documented for users in `docs/GUIDE.md` §7 (`c951b8d`,
+`v0.1.7`).
 
 ## Problem
 

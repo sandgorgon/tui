@@ -1,11 +1,26 @@
 package widget
 
 import (
+	"sort"
+
 	"github.com/sandgorgon/tui/cell"
 	"github.com/sandgorgon/tui/input"
 	"github.com/sandgorgon/tui/style"
 	"github.com/sandgorgon/tui/tui"
 )
+
+// StyleSpan overrides the style of buffer positions [Start, End) —
+// e.g. a syntax-highlighted token, a diagnostic range, or a search
+// match. Spans must be sorted by Start and must not overlap; Paint
+// sweeps them once per visible row assuming this, so out-of-order or
+// overlapping spans produce undefined (not crashing) results. A span
+// composes with the existing selection/cursor highlight rather than
+// being replaced by it, the same way the caller's own theme colors
+// already do.
+type StyleSpan struct {
+	Start, End int
+	Style      cell.Style
+}
 
 // TextAreaOptions configures TextArea.
 type TextAreaOptions struct {
@@ -15,6 +30,11 @@ type TextAreaOptions struct {
 	// Value is the field's *initial* content, read once at mount — see
 	// TextArea's doc comment.
 	Value string
+
+	// Highlights overrides the base style of specific buffer ranges —
+	// see StyleSpan. Recomputed and passed fresh every frame, like any
+	// other prop; nil means no overrides.
+	Highlights []StyleSpan
 
 	// OnChange, if non-nil, is called with the field's current content
 	// after every edit.
@@ -149,7 +169,8 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 		w.scrollCol = 0
 	}
 
-	base := w.opts.Theme.Text()
+	defaultStyle := w.opts.Theme.Text()
+	spans := w.opts.Highlights
 	selStart, selEnd, hasSel := w.selectionRange()
 	for row := range innerH {
 		lineIdx := w.scrollRow + row
@@ -169,11 +190,28 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 		// unrelated trailing columns, which don't correspond to real
 		// buffer positions the way idx does for idx < ln.end.
 		lineFullySelected := hasSel && selStart <= ln.start && selEnd > ln.end
+
+		// idx jumps around non-monotonically row-to-row (a short line
+		// following a long one, with scrollCol fixed from the long
+		// line, can start well before the previous row's last idx), so
+		// the span cursor is re-seeked once per row via binary search
+		// rather than carried forward across rows — but still sweeps
+		// forward (not per-cell binary search) within the row, since
+		// idx is monotonic there.
+		rowStart := ln.start + w.scrollCol
+		spanIdx := sort.Search(len(spans), func(i int) bool { return spans[i].End > rowStart })
 		for col := range innerW {
 			idx := ln.start + w.scrollCol + col
 			r := ' '
 			if idx < ln.end {
 				r = w.buf[idx]
+			}
+			for spanIdx < len(spans) && idx >= spans[spanIdx].End {
+				spanIdx++
+			}
+			base := defaultStyle
+			if spanIdx < len(spans) && idx >= spans[spanIdx].Start && idx < spans[spanIdx].End {
+				base = spans[spanIdx].Style
 			}
 			inSel := lineFullySelected || (hasSel && idx < ln.end && idx >= selStart && idx < selEnd)
 			style := highlightStyle(base, w.focused, inSel, idx == w.cursor && idx <= ln.end)

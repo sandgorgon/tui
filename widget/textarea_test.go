@@ -273,6 +273,42 @@ func TestTextAreaSelectionHighlightedInBuffer(t *testing.T) {
 	}
 }
 
+func TestTextAreaHighlightsOverrideBaseStyle(t *testing.T) {
+	red := cell.Style{Fg: cell.RGBColor(255, 0, 0)}
+	app, _ := textAreaApp(t, TextAreaOptions{
+		Theme: style.DefaultDark(), Value: "abcd\nxy",
+		Highlights: []StyleSpan{{Start: 2, End: 4, Style: red}}, // "cd"
+	})
+
+	if got := app.Buffer().At(2, 1).Style.Fg; got != cell.DefaultColor() {
+		t.Errorf("'b' (offset 1, outside the span) Fg = %v, want the theme default", got)
+	}
+	if got := app.Buffer().At(4, 1).Style.Fg; got != red.Fg {
+		t.Errorf("'d' (offset 3, inside the span) Fg = %v, want %v", got, red.Fg)
+	}
+	if got := app.Buffer().At(2, 2).Style.Fg; got != cell.DefaultColor() {
+		t.Errorf("'y' (line 1, past the span's End) Fg = %v, want the theme default", got)
+	}
+}
+
+func TestTextAreaHighlightsComposeWithSelection(t *testing.T) {
+	red := cell.Style{Fg: cell.RGBColor(255, 0, 0)}
+	app, _ := textAreaApp(t, TextAreaOptions{
+		Theme: style.DefaultDark(), Value: "abcd",
+		Highlights: []StyleSpan{{Start: 2, End: 4, Style: red}}, // "cd"
+	})
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome})
+	app.HandleInput(input.KeyEvent{Key: input.KeyEnd, Mod: input.ModShift}) // select "abcd"
+
+	c := app.Buffer().At(4, 1) // 'd', inside both the span and the selection
+	if c.Style.Fg != red.Fg {
+		t.Errorf("Fg = %v, want the span's color preserved under the selection highlight", c.Style.Fg)
+	}
+	if c.Style.Attr&cell.AttrReverse == 0 {
+		t.Errorf("Attr = %v, want AttrReverse still applied for the selection on top of the span", c.Style.Attr)
+	}
+}
+
 func TestTextAreaPlaceholderShownWhenEmpty(t *testing.T) {
 	node := TextArea(TextAreaOptions{Theme: style.DefaultDark(), Placeholder: "type here"})
 	buf := cell.NewBuffer(14, 5)

@@ -41,6 +41,44 @@ func TestListMultiSelectRendersCheckboxes(t *testing.T) {
 	}
 }
 
+func TestListRowStylesOverrideBaseStyle(t *testing.T) {
+	red := cell.Style{Fg: cell.RGBColor(255, 0, 0)}
+	node := List([]string{"a", "b", "c"}, 1, ListOptions{
+		Theme:     style.DefaultDark(),
+		RowStyles: []cell.Style{{}, red}, // only "b" (index 1) overridden
+	}, nil)
+	buf := cell.NewBuffer(10, 5)
+	paintNode(t, node, buf)
+
+	if got := buf.At(3, 1).Style.Fg; got != cell.DefaultColor() {
+		t.Errorf("'a' (index 0, not overridden) Fg = %v, want the theme default", got)
+	}
+	if got := buf.At(3, 2).Style.Fg; got != red.Fg {
+		t.Errorf("'b' (index 1, overridden) Fg = %v, want %v", got, red.Fg)
+	}
+	if got := buf.At(3, 3).Style.Fg; got != cell.DefaultColor() {
+		t.Errorf("'c' (index 2, past len(RowStyles)) Fg = %v, want the theme default", got)
+	}
+}
+
+func TestListRowStylesComposeWithCursorHighlight(t *testing.T) {
+	red := cell.Style{Fg: cell.RGBColor(255, 0, 0)}
+	node := List([]string{"a", "b"}, 1, ListOptions{
+		Theme:     style.DefaultDark(),
+		RowStyles: []cell.Style{{}, red}, // cursor is on "b", the overridden row
+	}, nil)
+	buf := cell.NewBuffer(10, 4)
+	paintNode(t, node, buf)
+
+	c := buf.At(3, 2) // 'b', cursor row
+	if c.Style.Fg != red.Fg {
+		t.Errorf("Fg = %v, want the row's color preserved under the cursor highlight", c.Style.Fg)
+	}
+	if c.Style.Attr&cell.AttrReverse == 0 {
+		t.Errorf("Attr = %v, want AttrReverse still applied for the cursor on top of the row style", c.Style.Attr)
+	}
+}
+
 func TestListRetainsScrollOffsetAcrossReconcile(t *testing.T) {
 	items := make([]string, 20)
 	for i := range items {

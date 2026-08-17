@@ -615,6 +615,46 @@ rather than being a late add-on.
     `SetReadDeadline` failure (e.g. an already-closed reader) still
     propagates as a real error.
 
+- **Per-region styling for `TextArea`/`List` — done.** Filed as
+  `docs/proposals/text-region-styling.md` by a downstream consumer
+  (kaze, a CRDT-native editor built on this library) wanting to color
+  arbitrary byte ranges/rows — syntax highlighting, diagnostics, diff/
+  blame views, search-match highlighting all need this, not just one
+  consumer's feature. Implemented the proposal's recommended shape
+  (general per-position styling) but as caller-supplied *data* rather
+  than a callback: `widget.StyleSpan{Start, End int; Style cell.Style}`
+  on `TextAreaOptions.Highlights` (buffer rune-offset ranges) and
+  `cell.Style` on `ListOptions.RowStyles` (per-item index, List being
+  row-granular already needs no sub-row span concept) — matching how
+  every other per-frame prop in this codebase (`Selected []bool`,
+  `StatusBar`'s `[]Segment`) is data recomputed fresh each frame, not a
+  stored closure invoked mid-`Paint`; this also means the widget owns
+  the "don't scan the whole document per cell" concern once, rather
+  than pushing a hand-rolled interval structure onto every caller.
+  `TextArea.Paint` resolves the per-cell style before the existing
+  `highlightStyle` selection/cursor overlay runs, so a span's color
+  survives being selected exactly like the theme's own colors already
+  did (composes via `Attr | AttrReverse`, never replaces `Fg`/`Bg`) —
+  confirmed this composed for free with the selection work below
+  without changing `highlightStyle` itself. Lookup is a per-row
+  `sort.Search` re-seek (spans must be caller-sorted by `Start`,
+  non-overlapping) followed by a forward sweep within the row: `idx`
+  is only monotonic *within* a row, not row-to-row (a short line
+  following a much longer one, with horizontal scroll still parked
+  from the long line, can start well before the previous row's last
+  `idx`), so a single sweep pointer carried across the whole `Paint`
+  call would have been wrong — re-seeking once per visible row instead
+  keeps the cost bounded by the viewport, not the document. `List`'s
+  cursor-row highlight had to change from a full style *replacement*
+  (`rowStyle = selected`) to composing via `Attr |= AttrReverse` the
+  same way, or a caller's `RowStyles` color would have been silently
+  clobbered on whichever row the cursor sits on — this was a real gap
+  in `List`'s existing code, not something the proposal's author could
+  have seen without reading `list.go` directly. 4 new tests
+  (`widget/textarea_test.go`, `widget/list_test.go`) covering override,
+  compose-with-selection, and compose-with-cursor-highlight; `go build/
+  vet/gofmt/test -race` clean across the whole repo.
+
 ---
 
 ## 10. Testing strategy

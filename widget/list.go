@@ -21,6 +21,14 @@ type ListOptions struct {
 	// the widget; see List's own doc comment for the one thing that is
 	// retained.
 	Selected []bool
+
+	// RowStyles overrides item i's base style with RowStyles[i] (the
+	// theme's default for any index at or past len(RowStyles)) — e.g.
+	// severity coloring or a freshness indicator per row. Composes with
+	// the cursor-row highlight rather than being replaced by it, same
+	// convention as Selected: a caller-owned prop supplied fresh every
+	// frame, not retained state.
+	RowStyles []cell.Style
 }
 
 // List is a focusable, vertically-scrolling, optionally multi-select
@@ -79,7 +87,6 @@ func (w *listWidget) Paint(p *cell.Painter) {
 	w.scrollOffset = clampScroll(w.scrollOffset, w.cursor, len(w.items), innerH)
 
 	base := w.opts.Theme.Text()
-	selected := cell.Style{Fg: base.Fg, Bg: base.Bg, Attr: base.Attr | cell.AttrReverse}
 
 	for row := range innerH {
 		idx := w.scrollOffset + row
@@ -88,9 +95,12 @@ func (w *listWidget) Paint(p *cell.Painter) {
 		}
 
 		rowStyle := base
+		if idx < len(w.opts.RowStyles) {
+			rowStyle = w.opts.RowStyles[idx]
+		}
 		marker := "  "
 		if idx == w.cursor {
-			rowStyle = selected
+			rowStyle = cell.Style{Fg: rowStyle.Fg, Bg: rowStyle.Bg, Attr: rowStyle.Attr | cell.AttrReverse}
 			marker = ". "
 			if w.focused {
 				marker = "> "

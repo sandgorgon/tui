@@ -2,6 +2,7 @@ package widget
 
 import (
 	"sort"
+	"unicode"
 
 	"github.com/sandgorgon/tui/cell"
 	"github.com/sandgorgon/tui/input"
@@ -76,6 +77,13 @@ type textAreaWidget struct {
 	scrollRow, scrollCol int
 	focused              bool
 
+	// lastVisibleLines is innerH from the most recent Paint — the only
+	// way PageUp/PageDown's handleKey cases know how many lines to jump
+	// by, since Paint's own innerH is computed fresh each frame from the
+	// painter's Size() and otherwise never retained. Zero before the
+	// first Paint; handleKey falls back to moving by 1 line in that case.
+	lastVisibleLines int
+
 	// dragging is true between a MouseLeft press and its matching
 	// release — see handleMouse.
 	dragging bool
@@ -121,6 +129,19 @@ func lineBounds(buf []rune, i int) (start, end int) {
 	return start, end
 }
 
+// lineIndexOf returns the index into lines of the line containing
+// buffer offset pos — shared by Paint (to find the cursor's row) and
+// movePage (to jump by a line count rather than lineBounds' one-line-
+// at-a-time walk).
+func lineIndexOf(lines []textLine, pos int) int {
+	for i, ln := range lines {
+		if pos >= ln.start && pos <= ln.end {
+			return i
+		}
+	}
+	return len(lines) - 1
+}
+
 func (w *textAreaWidget) Paint(p *cell.Painter) {
 	width, height := p.Size()
 	if width < 2 || height < 2 {
@@ -138,6 +159,7 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 	if innerW <= 0 || innerH <= 0 {
 		return
 	}
+	w.lastVisibleLines = innerH
 
 	if len(w.buf) == 0 {
 		if w.opts.Placeholder != "" {
@@ -150,13 +172,8 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 	}
 
 	lines := splitLines(w.buf)
-	cursorLine, cursorCol := 0, 0
-	for i, ln := range lines {
-		if w.cursor >= ln.start && w.cursor <= ln.end {
-			cursorLine, cursorCol = i, w.cursor-ln.start
-			break
-		}
-	}
+	cursorLine := lineIndexOf(lines, w.cursor)
+	cursorCol := w.cursor - lines[cursorLine].start
 
 	w.scrollRow = clampScroll(w.scrollRow, cursorLine, len(lines), innerH)
 	switch {
@@ -258,7 +275,17 @@ func (w *textAreaWidget) HandleEvent(e input.Event) tui.Cmd {
 
 func (w *textAreaWidget) handleKey(ke input.KeyEvent) bool {
 	shift := ke.Mod&input.ModShift != 0
+	ctrl := ke.Mod&input.ModCtrl != 0
 	switch {
+	case ctrl && ke.Key == input.KeyLeft:
+		w.moveTo(wordBoundary(w.buf, w.cursor, -1), shift)
+	case ctrl && ke.Key == input.KeyRight:
+		w.moveTo(wordBoundary(w.buf, w.cursor, 1), shift)
+	case ctrl && ke.Key == input.KeyHome:
+		w.moveTo(0, shift)
+	case ctrl && ke.Key == input.KeyEnd:
+		w.moveTo(len(w.buf), shift)
+
 	case ke.Key == input.KeyLeft:
 		w.moveHorizontal(-1, shift)
 	case ke.Key == input.KeyRight:
@@ -273,6 +300,10 @@ func (w *textAreaWidget) handleKey(ke input.KeyEvent) bool {
 	case ke.Key == input.KeyEnd:
 		_, end := lineBounds(w.buf, w.cursor)
 		w.moveTo(end, shift)
+	case ke.Key == input.KeyPgUp:
+		w.movePage(-1, shift)
+	case ke.Key == input.KeyPgDown:
+		w.movePage(1, shift)
 
 	case ke.Key == input.KeyBackspace:
 		return w.backspace()
@@ -325,6 +356,61 @@ func (w *textAreaWidget) moveVertical(delta int, shift bool) {
 	}
 
 	w.moveTo(min(targetStart+col, targetEnd), shift)
+}
+
+// movePage moves the cursor by one screenful of lines (dir<0 up,
+// dir>0 down), same column-clamping convention as moveVertical — it's
+// moveVertical's shape with a multi-line delta instead of ±1. Falls
+// back to a single line if lastVisibleLines hasn't been set yet (i.e.
+// before the first Paint).
+func (w *textAreaWidget) movePage(dir int, shift bool) {
+	n := w.lastVisibleLines
+	if n <= 0 {
+		n = 1
+	}
+
+	lines := splitLines(w.buf)
+	lineStart, _ := lineBounds(w.buf, w.cursor)
+	col := w.cursor - lineStart
+
+	target := lineIndexOf(lines, w.cursor) + dir*n
+	target = max(0, min(target, len(lines)-1))
+
+	ln := lines[target]
+	w.moveTo(min(ln.start+col, ln.end), shift)
+}
+
+// isWordChar reports whether r is part of a "word" for Ctrl+Left/
+// Ctrl+Right's word-boundary jump — letters, digits, and underscore.
+func isWordChar(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+}
+
+// wordBoundary scans from from in delta's direction (delta<0 left,
+// delta>0 right) past the leading run of non-word characters, then
+// past the following run of word characters, and returns where it
+// stopped — the standard "skip whitespace/punctuation, then skip the
+// word" editor convention. '\n' counts as a non-word character like
+// any other, so a jump can cross a line boundary the same as it would
+// cross a run of spaces.
+func wordBoundary(buf []rune, from int, delta int) int {
+	i := from
+	if delta > 0 {
+		for i < len(buf) && !isWordChar(buf[i]) {
+			i++
+		}
+		for i < len(buf) && isWordChar(buf[i]) {
+			i++
+		}
+		return i
+	}
+	for i > 0 && !isWordChar(buf[i-1]) {
+		i--
+	}
+	for i > 0 && isWordChar(buf[i-1]) {
+		i--
+	}
+	return i
 }
 
 // handleMouse implements click-to-position-cursor and click/drag-to-

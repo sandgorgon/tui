@@ -222,6 +222,88 @@ func TestTextAreaBackspaceDeletesSelectionAcrossNewline(t *testing.T) {
 	}
 }
 
+func TestTextAreaCtrlHomeEndJumpToBufferStartAndEnd(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "abcd\nxy\nefgh"})
+	// Cursor mounts at the very end. Ctrl+Home should jump all the way
+	// to offset 0 regardless of line, unlike plain Home (start of the
+	// current line only).
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome, Mod: input.ModCtrl})
+	app.HandleInput(input.KeyEvent{Rune: 'Z'})
+	if *value != "Zabcd\nxy\nefgh" {
+		t.Fatalf("value after Ctrl+Home = %q, want %q", *value, "Zabcd\nxy\nefgh")
+	}
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyEnd, Mod: input.ModCtrl})
+	app.HandleInput(input.KeyEvent{Rune: 'Q'})
+	if *value != "Zabcd\nxy\nefghQ" {
+		t.Fatalf("value after Ctrl+End = %q, want %q", *value, "Zabcd\nxy\nefghQ")
+	}
+}
+
+func TestTextAreaCtrlLeftRightJumpsWordBoundaries(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "foo bar"})
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome})
+
+	// From the start, Ctrl+Right should skip the current word ("foo")
+	// and land right after it, at the following space.
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight, Mod: input.ModCtrl})
+	app.HandleInput(input.KeyEvent{Rune: 'X'})
+	if *value != "fooX bar" {
+		t.Fatalf("value after first Ctrl+Right = %q, want %q", *value, "fooX bar")
+	}
+
+	// From just after "fooX", Ctrl+Right should skip the space and then
+	// all of "bar", landing at the buffer's end.
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight, Mod: input.ModCtrl})
+	app.HandleInput(input.KeyEvent{Rune: 'Y'})
+	if *value != "fooX barY" {
+		t.Fatalf("value after second Ctrl+Right = %q, want %q", *value, "fooX barY")
+	}
+
+	// From the end, Ctrl+Left should land right before the last word
+	// ("bar"), skipping past "Y" only because "Y" is itself a word
+	// character contiguous with "bar" (no space separates them).
+	app.HandleInput(input.KeyEvent{Key: input.KeyLeft, Mod: input.ModCtrl})
+	app.HandleInput(input.KeyEvent{Rune: 'Z'})
+	if *value != "fooX ZbarY" {
+		t.Fatalf("value after Ctrl+Left = %q, want %q", *value, "fooX ZbarY")
+	}
+}
+
+func TestTextAreaCtrlShiftRightSelectsWord(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "foo bar"})
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome})
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight, Mod: input.ModCtrl | input.ModShift})
+	app.HandleInput(input.KeyEvent{Rune: 'X'})
+	if *value != "X bar" {
+		t.Fatalf("value = %q, want %q (Ctrl+Shift+Right should select \"foo\" for typing to replace)", *value, "X bar")
+	}
+}
+
+func TestTextAreaPageDownPageUpMoveByVisibleLineCount(t *testing.T) {
+	// App height 6 minus the 2-row border leaves an inner height of 4
+	// visible lines — see textArea's Paint.
+	app, value := textAreaApp(t, TextAreaOptions{
+		Theme: style.DefaultDark(),
+		Value: "0\n1\n2\n3\n4\n5\n6\n7\n8\n9",
+	})
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome, Mod: input.ModCtrl}) // -> offset 0, line "0"
+	app.HandleInput(input.KeyEvent{Key: input.KeyPgDown})                   // -> down 4 lines, to line "4"
+	app.HandleInput(input.KeyEvent{Rune: 'X'})
+	want := "0\n1\n2\n3\nX4\n5\n6\n7\n8\n9"
+	if *value != want {
+		t.Fatalf("value after PgDown = %q, want %q", *value, want)
+	}
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyPgUp}) // -> up 4 lines, back to line "0"
+	app.HandleInput(input.KeyEvent{Rune: 'Y'})
+	want = "0Y\n1\n2\n3\nX4\n5\n6\n7\n8\n9"
+	if *value != want {
+		t.Fatalf("value after PgUp = %q, want %q", *value, want)
+	}
+}
+
 func TestTextAreaClickSetsCursorOnCorrectLine(t *testing.T) {
 	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "abcd\nxy\nefgh"})
 	// Border occupies row 0/col 0; content starts at local (1,1). Line 1

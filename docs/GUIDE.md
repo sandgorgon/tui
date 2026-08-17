@@ -255,6 +255,12 @@ with coordinates translated to be local to whichever widget was
 clicked, so a widget never needs to know its own absolute screen
 position.
 
+`TextArea` also handles a standard set of navigation keys beyond plain
+arrows: `Ctrl+Left`/`Ctrl+Right` jump by word, `Ctrl+Home`/`Ctrl+End`
+jump to the start/end of the buffer, and `PageUp`/`PageDown` move by
+one screenful of lines. All of them extend the active selection when
+held with `Shift`, the same as the plain arrow keys already do.
+
 ## 8. Styling: cell.Style directly, or style.Theme
 
 Every visible thing — `tui.Text`, a widget's rows, borders — is

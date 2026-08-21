@@ -117,6 +117,42 @@ func TestPainterText(t *testing.T) {
 	}
 }
 
+func TestPainterSetCellControlRuneSubstitutesPlaceholder(t *testing.T) {
+	b := NewBuffer(3, 1)
+	p := NewPainter(b)
+	style := Style{Attr: AttrBold}
+	p.SetCell(1, 0, '\t', style)
+
+	want := Cell{Rune: ' ', Style: style, Width: 1}
+	if got := b.At(1, 0); got != want {
+		t.Errorf("At(1,0) = %+v, want %+v (a control rune must become a printable placeholder, not be stored verbatim — otherwise the emitted byte desyncs a real terminal's cursor from the renderer's own x+=Width bookkeeping)", got, want)
+	}
+}
+
+func TestPainterFillControlRuneSubstitutesPlaceholder(t *testing.T) {
+	b := NewBuffer(3, 1)
+	p := NewPainter(b)
+	p.Fill(0, 0, 3, 1, '\x01', Style{})
+
+	for x := range 3 {
+		if got := b.At(x, 0); got.Rune != ' ' || got.Width != 1 {
+			t.Errorf("At(%d,0) = %+v, want a space placeholder", x, got)
+		}
+	}
+}
+
+func TestPainterSetCellZeroWidthRuneKeepsRune(t *testing.T) {
+	b := NewBuffer(3, 1)
+	p := NewPainter(b)
+	const combiningAcute = '\u0301' // zero-width combining mark, not a control rune
+	p.SetCell(1, 0, combiningAcute, Style{})
+
+	want := Cell{Rune: combiningAcute, Width: 1}
+	if got := b.At(1, 0); got != want {
+		t.Errorf("At(1,0) = %+v, want %+v (zero-width combining marks keep their own rune, per Painter's documented combining-mark simplification — only true control runes get substituted)", got, want)
+	}
+}
+
 func TestPainterSetRawCellWritesVerbatim(t *testing.T) {
 	b := NewBuffer(3, 1)
 	p := NewPainter(b)

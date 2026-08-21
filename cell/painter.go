@@ -67,10 +67,7 @@ func (p *Painter) SetCell(x, y int, r rune, style Style) {
 	if x < 0 || y < 0 || x >= p.clip.W || y >= p.clip.H {
 		return
 	}
-	width := wcwidth.RuneWidth(r)
-	if width <= 0 {
-		width = 1
-	}
+	r, width := resolveCell(r)
 	if width == 2 && x+1 >= p.clip.W {
 		return
 	}
@@ -122,10 +119,27 @@ func (p *Painter) Text(x, y int, s string, style Style) int {
 // bookkeeping the way SetCell/Text do.
 func (p *Painter) Fill(x, y, w, h int, r rune, style Style) {
 	rect := intersect(Rect{X: x, Y: y, W: w, H: h}, Rect{X: 0, Y: 0, W: p.clip.W, H: p.clip.H})
-	width := wcwidth.RuneWidth(r)
-	if width <= 0 {
-		width = 1
-	}
+	r, width := resolveCell(r)
 	c := Cell{Rune: r, Style: style, Width: uint8(width)}
 	p.buf.Fill(p.clip.X+rect.X, p.clip.Y+rect.Y, rect.W, rect.H, c)
+}
+
+// resolveCell returns the rune and column width that should actually
+// be stored for r. A true non-printable control rune (C0/DEL/C1, where
+// wcwidth.RuneWidth reports a negative width) reaches a real terminal
+// as a raw control byte, not printable output — the terminal wouldn't
+// advance its cursor by a coerced Width the way the renderer's own
+// x+=Width bookkeeping assumes, so the rune itself has to change, not
+// just the tracked width. A zero-width combining mark keeps its rune
+// as-is (see Painter's doc comment on combining marks) and only gets
+// its width coerced to occupy one cell.
+func resolveCell(r rune) (rune, int) {
+	width := wcwidth.RuneWidth(r)
+	if width < 0 {
+		return ' ', 1
+	}
+	if width == 0 {
+		return r, 1
+	}
+	return r, width
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/sandgorgon/tui/cell"
 	"github.com/sandgorgon/tui/input"
+	"github.com/sandgorgon/tui/internal/wcwidth"
 	"github.com/sandgorgon/tui/style"
 	"github.com/sandgorgon/tui/tui"
 )
@@ -129,6 +130,49 @@ func lineBounds(buf []rune, i int) (start, end int) {
 	return start, end
 }
 
+// runeCols returns r's on-screen column width, matching what
+// cell.Painter.SetCell will actually store for it (a control rune that
+// SetCell substitutes a placeholder for still occupies one column, not
+// the negative width wcwidth.RuneWidth reports for the raw rune).
+func runeCols(r rune) int {
+	w := wcwidth.RuneWidth(r)
+	if w <= 0 {
+		return 1
+	}
+	return w
+}
+
+// visualWidth returns the number of on-screen columns buf[from:to]
+// occupies — the same quantity Paint's per-line column math has to
+// agree with, so a wide rune (e.g. CJK) counts as 2 rune-buffer
+// columns' worth of screen space, not 1.
+func visualWidth(buf []rune, from, to int) int {
+	w := 0
+	for _, r := range buf[from:to] {
+		w += runeCols(r)
+	}
+	return w
+}
+
+// columnToIndex returns the buffer index within [from,to) whose glyph
+// occupies visual column targetCol relative to from, or to if targetCol
+// falls at or past the line's content — the inverse of visualWidth,
+// used to turn a screen column (a mouse click, or a vertical-move's
+// preserved column) back into a buffer position.
+func columnToIndex(buf []rune, from, to, targetCol int) int {
+	col := 0
+	idx := from
+	for idx < to {
+		w := runeCols(buf[idx])
+		if col+w > targetCol {
+			return idx
+		}
+		col += w
+		idx++
+	}
+	return to
+}
+
 // lineIndexOf returns the index into lines of the line containing
 // buffer offset pos — shared by Paint (to find the cursor's row) and
 // movePage (to jump by a line count rather than lineBounds' one-line-
@@ -173,7 +217,7 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 
 	lines := splitLines(w.buf)
 	cursorLine := lineIndexOf(lines, w.cursor)
-	cursorCol := w.cursor - lines[cursorLine].start
+	cursorCol := visualWidth(w.buf, lines[cursorLine].start, w.cursor)
 
 	w.scrollRow = clampScroll(w.scrollRow, cursorLine, len(lines), innerH)
 	switch {
@@ -208,31 +252,70 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 		// buffer positions the way idx does for idx < ln.end.
 		lineFullySelected := hasSel && selStart <= ln.start && selEnd > ln.end
 
-		// idx jumps around non-monotonically row-to-row (a short line
-		// following a long one, with scrollCol fixed from the long
-		// line, can start well before the previous row's last idx), so
-		// the span cursor is re-seeked once per row via binary search
-		// rather than carried forward across rows — but still sweeps
-		// forward (not per-cell binary search) within the row, since
-		// idx is monotonic there.
-		rowStart := ln.start + w.scrollCol
-		spanIdx := sort.Search(len(spans), func(i int) bool { return spans[i].End > rowStart })
-		for col := range innerW {
-			idx := ln.start + w.scrollCol + col
-			r := ' '
-			if idx < ln.end {
+		// idx starts at the first buffer rune at or past the scrolled-
+		// past region rather than jumping there by arithmetic (ln.start
+		// + w.scrollCol, valid only when every rune is one column wide):
+		// a wide rune earlier in the line shifts a buffer index's screen
+		// column away from its rune-count offset, so finding where
+		// scrollCol lands means walking runes and summing width. If
+		// scrollCol splits a wide rune (lands mid-glyph), that rune is
+		// skipped entirely — col then overshoots w.scrollCol by the
+		// glyph's leftover column(s), which the loop below renders
+		// blank rather than drawing half a glyph.
+		idx, col := ln.start, 0
+		for idx < ln.end && col < w.scrollCol {
+			col += runeCols(w.buf[idx])
+			idx++
+		}
+
+		// The span cursor is re-seeked once per row via binary search
+		// rather than carried forward across rows, since idx jumps
+		// around non-monotonically row-to-row (a short line following a
+		// long one, with scrollCol fixed from the long line, can start
+		// well before the previous row's last idx) — but still sweeps
+		// forward (not per-cell binary search) within the row, since idx
+		// is monotonic there.
+		spanIdx := sort.Search(len(spans), func(i int) bool { return spans[i].End > idx })
+		for screenCol := 0; screenCol < innerW; {
+			if gap := col - w.scrollCol; gap > screenCol {
+				style := highlightStyle(defaultStyle, w.focused, lineFullySelected, false)
+				inner.SetCell(screenCol, row, ' ', style)
+				screenCol++
+				continue
+			}
+
+			atEnd := idx >= ln.end
+			r := rune(' ')
+			width := 1
+			if !atEnd {
 				r = w.buf[idx]
+				width = runeCols(r)
+			}
+			if screenCol+width > innerW {
+				// A wide rune that would only half-fit at the row's
+				// right edge: cell.Painter.SetCell won't draw it at all
+				// (see its own doc comment), but this column still needs
+				// *some* explicit content this frame, or a stale cell
+				// from a previous frame survives undrawn.
+				style := highlightStyle(defaultStyle, w.focused, lineFullySelected, false)
+				inner.SetCell(screenCol, row, ' ', style)
+				screenCol++
+				continue
 			}
 			for spanIdx < len(spans) && idx >= spans[spanIdx].End {
 				spanIdx++
 			}
 			base := defaultStyle
-			if spanIdx < len(spans) && idx >= spans[spanIdx].Start && idx < spans[spanIdx].End {
+			if !atEnd && spanIdx < len(spans) && idx >= spans[spanIdx].Start && idx < spans[spanIdx].End {
 				base = spans[spanIdx].Style
 			}
-			inSel := lineFullySelected || (hasSel && idx < ln.end && idx >= selStart && idx < selEnd)
+			inSel := lineFullySelected || (hasSel && !atEnd && idx >= selStart && idx < selEnd)
 			style := highlightStyle(base, w.focused, inSel, idx == w.cursor && idx <= ln.end)
-			inner.SetCell(col, row, r, style)
+			inner.SetCell(screenCol, row, r, style)
+
+			screenCol += width
+			col += width
+			idx++
 		}
 	}
 }
@@ -330,14 +413,17 @@ func (w *textAreaWidget) handleKey(ke input.KeyEvent) bool {
 	return false
 }
 
-// moveVertical moves the cursor to the equivalent column on the
+// moveVertical moves the cursor to the equivalent screen column on the
 // previous (delta<0) or next (delta>0) line, clamped to that line's
-// length if it's shorter — the standard editor convention. shift
+// length if it's shorter — the standard editor convention, preserving
+// visual column (not buffer-rune count) so the cursor stays under the
+// same on-screen position even when a wide rune (e.g. CJK) on one of
+// the two lines shifts rune-count and screen column out of step. shift
 // extends (or starts) the active selection to the new position, same
 // as every other movement here — see moveTo.
 func (w *textAreaWidget) moveVertical(delta int, shift bool) {
 	lineStart, lineEnd := lineBounds(w.buf, w.cursor)
-	col := w.cursor - lineStart
+	col := visualWidth(w.buf, lineStart, w.cursor)
 
 	var targetStart, targetEnd int
 	switch {
@@ -355,14 +441,14 @@ func (w *textAreaWidget) moveVertical(delta int, shift bool) {
 		return
 	}
 
-	w.moveTo(min(targetStart+col, targetEnd), shift)
+	w.moveTo(columnToIndex(w.buf, targetStart, targetEnd, col), shift)
 }
 
 // movePage moves the cursor by one screenful of lines (dir<0 up,
-// dir>0 down), same column-clamping convention as moveVertical — it's
-// moveVertical's shape with a multi-line delta instead of ±1. Falls
-// back to a single line if lastVisibleLines hasn't been set yet (i.e.
-// before the first Paint).
+// dir>0 down), same visual-column-clamping convention as moveVertical
+// — it's moveVertical's shape with a multi-line delta instead of ±1.
+// Falls back to a single line if lastVisibleLines hasn't been set yet
+// (i.e. before the first Paint).
 func (w *textAreaWidget) movePage(dir int, shift bool) {
 	n := w.lastVisibleLines
 	if n <= 0 {
@@ -371,13 +457,13 @@ func (w *textAreaWidget) movePage(dir int, shift bool) {
 
 	lines := splitLines(w.buf)
 	lineStart, _ := lineBounds(w.buf, w.cursor)
-	col := w.cursor - lineStart
+	col := visualWidth(w.buf, lineStart, w.cursor)
 
 	target := lineIndexOf(lines, w.cursor) + dir*n
 	target = max(0, min(target, len(lines)-1))
 
 	ln := lines[target]
-	w.moveTo(min(ln.start+col, ln.end), shift)
+	w.moveTo(columnToIndex(w.buf, ln.start, ln.end, col), shift)
 }
 
 // isWordChar reports whether r is part of a "word" for Ctrl+Left/
@@ -456,8 +542,8 @@ func (w *textAreaWidget) setCursorFromMouse(me input.MouseEvent) {
 	lineIdx := max(0, min(w.scrollRow+(me.Y-1), len(lines)-1))
 	ln := lines[lineIdx]
 
-	idx := ln.start + w.scrollCol + (me.X - 1)
-	w.cursor = max(ln.start, min(idx, ln.end))
+	targetCol := max(0, w.scrollCol+(me.X-1))
+	w.cursor = columnToIndex(w.buf, ln.start, ln.end, targetCol)
 }
 
 func (w *textAreaWidget) Focusable() bool         { return true }

@@ -156,6 +156,34 @@ func TestRenderCursorVisibilityToggle(t *testing.T) {
 	}
 }
 
+func TestRenderControlRuneDoesntDesyncCursor(t *testing.T) {
+	// A control rune (TAB here) painted via cell.Painter must never
+	// reach the terminal as a raw control byte: a real terminal jumps a
+	// literal TAB to the next 8-column tab stop rather than advancing
+	// one column, which would desync the renderer's own x+=Width cursor
+	// bookkeeping from where the terminal actually ends up. SetCell is
+	// responsible for substituting a printable placeholder before the
+	// cell ever reaches the renderer — this exercises that whole path,
+	// not just emitSpan in isolation.
+	back := cell.NewBuffer(4, 1)
+	p := cell.NewPainter(back)
+	p.SetCell(0, 0, 'a', cell.Style{})
+	p.SetCell(1, 0, '\t', cell.Style{})
+	p.SetCell(2, 0, 'b', cell.Style{})
+
+	r := NewRenderer(Options{ColorLevel: term.ColorTrueColor})
+	var buf bytes.Buffer
+	if err := r.Render(&buf, back, 0, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.ContainsRune(buf.Bytes(), '\t') {
+		t.Errorf("output = %q, must not contain a raw TAB byte", buf.Bytes())
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("a b")) {
+		t.Errorf("output = %q, want it to contain \"a b\" (TAB substituted with a single space)", buf.Bytes())
+	}
+}
+
 func TestRenderWideRuneSpan(t *testing.T) {
 	r := NewRenderer(Options{ColorLevel: term.ColorTrueColor})
 	back := cell.NewBuffer(4, 1)

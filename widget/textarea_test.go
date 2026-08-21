@@ -122,6 +122,54 @@ func TestTextAreaPaintShowsMultipleLines(t *testing.T) {
 	}
 }
 
+func TestTextAreaPaintWideRuneNoCorruption(t *testing.T) {
+	// A wide rune (width 2) followed by another character: Paint's row
+	// loop must place the wide rune, its continuation cell, and the
+	// next character at their true screen columns rather than assuming
+	// one buffer rune is always one column — a stale 1:1 assumption
+	// would have the loop's next iteration immediately overwrite the
+	// continuation cell with 'b'.
+	node := TextArea(TextAreaOptions{Theme: style.DefaultDark(), Value: "中b"})
+	buf := cell.NewBuffer(6, 3)
+	paintNode(t, node, buf)
+
+	if got := buf.At(1, 1); got.Rune != '中' || got.Width != 2 {
+		t.Errorf("At(1,1) = %+v, want the wide rune '中' with Width 2", got)
+	}
+	if got := buf.At(2, 1); !got.IsContinuation() {
+		t.Errorf("At(2,1) = %+v, want an intact continuation cell, not overwritten by the next rune", got)
+	}
+	if got := buf.At(3, 1); got.Rune != 'b' {
+		t.Errorf("At(3,1) = %+v, want 'b' at its true screen column (past the wide rune's 2 columns)", got)
+	}
+}
+
+func TestTextAreaClickAccountsForWideRuneColumns(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "中y"})
+	// Border occupies row 0/col 0; inner starts at local (1,1). '中'
+	// spans screen columns 1-2, so 'y' sits at column 3 — X=3 should
+	// land the cursor right before 'y', not one column short the way
+	// rune-count-based (rather than screen-column-based) hit-testing
+	// would place it.
+	app.HandleInput(input.MouseEvent{X: 3, Y: 1, Button: input.MouseLeft})
+	app.HandleInput(input.KeyEvent{Rune: 'Z'})
+	if *value != "中Zy" {
+		t.Fatalf("value = %q, want %q (click should account for the wide rune's 2-column width)", *value, "中Zy")
+	}
+}
+
+func TestTextAreaMoveVerticalPreservesVisualColumnAcrossWideRunes(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "中abc\nxyz"})
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome, Mod: input.ModCtrl}) // cursor -> 0
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight})
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight}) // cursor -> right after "中a" (visual col 3)
+	app.HandleInput(input.KeyEvent{Key: input.KeyDown})  // -> visual col 3 on "xyz": past 'z', not one short
+	app.HandleInput(input.KeyEvent{Rune: 'Z'})
+	if *value != "中abc\nxyzZ" {
+		t.Fatalf("value = %q, want %q (Down should preserve visual column, not buffer rune count, across the wide rune on the line above)", *value, "中abc\nxyzZ")
+	}
+}
+
 func TestTextAreaTabInsertsLiteralTabCharacter(t *testing.T) {
 	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark()})
 	app.HandleInput(input.KeyEvent{Rune: 'a'})

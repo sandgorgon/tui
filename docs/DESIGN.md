@@ -655,6 +655,45 @@ rather than being a late add-on.
   compose-with-selection, and compose-with-cursor-highlight; `go build/
   vet/gofmt/test -race` clean across the whole repo.
 
+- **Control-rune and wide-rune cursor desync — fixed.** Filed as
+  `docs/proposals/control-rune-cursor-desync.md` by a downstream
+  consumer (kaze) and confirmed against a real terminal via a raw-byte
+  PTY capture, not just read from source: `cell.Painter.SetCell`/`Fill`
+  coerced a control rune's (TAB included) *width* to a safe fallback but
+  left `Cell.Rune` storing the literal control rune, so `render.emitSpan`
+  wrote a real control byte to the terminal — which jumps to the next
+  tab stop for TAB, not `+1` column the way the renderer's own `x+=Width`
+  bookkeeping assumed, desyncing every byte emitted afterward from where
+  the terminal actually put its cursor. Reachable on ordinary use, not
+  just crafted input: `TextArea` claims raw Tab specifically to let a
+  user type a literal `\t`, and reads it back into `Paint` with no
+  expansion. Fixed at the one choke point every widget's drawing already
+  goes through — a shared `resolveCell` in `cell/painter.go` substitutes
+  a printable space for `Cell.Rune` itself (not just the width) whenever
+  `wcwidth.RuneWidth(r) < 0`, leaving the already-documented zero-width-
+  combining-mark simplification (`== 0`) untouched. A second, unrelated
+  desync was found while evaluating the report: `TextArea` never called
+  `wcwidth.RuneWidth` anywhere, so every place it translated a buffer
+  rune index to a screen column (`Paint`'s scroll clamp and row loop,
+  `setCursorFromMouse`, `moveVertical`/`movePage`'s column preservation)
+  assumed one rune is always one column — which a wide rune (CJK, emoji)
+  breaks, and which was actively overwriting `SetCell`'s own
+  continuation cell mid-frame in `Paint`'s row loop (one `SetCell` call
+  per screen column *and* per buffer rune, in lockstep, so the next
+  rune's `SetCell` call landed on the same continuation cell the wide
+  rune had just written). Added `runeCols`/`visualWidth`/`columnToIndex`
+  helpers to `widget/textarea.go` (mirroring `Paragraph`'s existing
+  `wcwidth`-aware wrapping) and rewired all four call sites to work in
+  visual columns; `Paint`'s row loop now walks buffer runes deriving
+  each one's screen column from cumulative width instead of iterating
+  screen columns 1:1 with runes, with explicit blank-column handling for
+  a wide rune split by the scroll offset or one that would only
+  half-fit at the row's right edge (both cases `Painter.SetCell` would
+  silently not draw, but the column still needs *some* explicit content
+  this frame or a stale cell survives undrawn). 8 new tests across
+  `cell`, `render`, and `widget/textarea_test.go`; `go build/vet/test`
+  clean across the whole repo.
+
 ---
 
 ## 10. Testing strategy

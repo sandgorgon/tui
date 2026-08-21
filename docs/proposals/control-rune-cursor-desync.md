@@ -1,7 +1,9 @@
 # Bug: literal control runes and wide runes desync the renderer's cursor tracking from the real terminal
 
-Status: **accepted and implemented** (not yet committed). Filed by a
-consumer (kaze) — confirmed against a real terminal via a raw-byte PTY
+Status: **accepted and implemented**, `101669c` on `develop`, merged to
+`main` at `2b9acfe` (not yet released — `v0.1.8` is `main`'s most recent
+tag). Filed by a consumer (kaze) — confirmed against a real terminal via
+a raw-byte PTY
 capture, not just read from source. A second, related desync in
 `TextArea`'s own column math (wide/multi-column runes) was found while
 evaluating this report and folded into the same fix, since both are the

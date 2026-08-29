@@ -694,6 +694,38 @@ rather than being a late add-on.
   `cell`, `render`, and `widget/textarea_test.go`; `go build/vet/test`
   clean across the whole repo.
 
+- **Reconciler: keyed subtree reuse across a reparenting move — done.**
+  Filed as [#3](https://github.com/sandgorgon/tui/issues/3) and
+  `docs/proposals/reconciler-cross-parent-key-reuse.md`, surfaced
+  building 9sh (a pane-splitting terminal multiplexer) on `tui.App`:
+  `reconcileChildren`'s key matching only ever searched one parent's
+  own previous children, so a leaf keeping its `Node.Key` while moving
+  one level deeper (or shallower) — e.g. splitting a pane wraps it in a
+  brand-new sibling Box — always mounted a fresh `Widget`, killing a
+  live `widget.Terminal`'s pty on every split. Fixed by giving
+  `reconcile` (`reconcile.go`) a whole previous-tree key index
+  (`reconcileCtx.byKey`, built by `snapshotPrev` before any mutation)
+  that `reconcileChildren` falls back to once a key misses locally —
+  the per-parent match stays the primary, unchanged path. This forced
+  disposal out of the per-parent walk entirely: a retained node left
+  unmatched at the parent it used to occupy might still be claimed
+  elsewhere in the same pass, so `disposeUnclaimed` now runs once,
+  after the whole tree has been walked, closing only what no slot
+  anywhere claimed (`reconcileCtx.claimed`) — `disposeTree` itself is
+  untouched, still used as-is by `App`/`Tree`/`Focusable`'s own
+  `Close()` for full teardown, a separate concern from per-frame
+  reconciliation. A claimed key is deleted from the index immediately,
+  so a genuine key collision (two `next` slots sharing a key) can't
+  alias the same `Widget` instance into two tree positions — the first
+  slot visited reuses it, the second mounts fresh. Scoped to one
+  top-level `reconcile` call's own tree only: a `widget.Viewport`'s
+  hosted `Tree` or a `Focusable`'s wrapped child each still reconcile
+  independently, per `reconcile`'s doc comment. 4 new tests in
+  `tui/reconcile_test.go` and `tui/dispose_test.go` (reparenting deeper
+  and shallower, the collision safety net, and confirming a reparented
+  `io.Closer` widget is never disposed); `go build/vet/test -race`
+  clean across the whole repo.
+
 ---
 
 ## 10. Testing strategy

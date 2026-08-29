@@ -214,6 +214,135 @@ func TestBoxPaintUsesLayoutSplit(t *testing.T) {
 	}
 }
 
+// TestReconcileChildrenReusesKeyedNodeWhenReparented guards the case
+// docs/proposals/reconciler-cross-parent-key-reuse.md and issue #3
+// describe: a keyed leaf moving one level deeper under a brand-new
+// parent Box across frames (e.g. splitting a pane) used to always
+// mount a fresh Widget, because per-parent key matching alone has no
+// way to find a Node's previous retained state once its immediate
+// parent itself is new. reconcile's whole-tree fallback (reconcile.go)
+// should find it anyway.
+func TestReconcileChildrenReusesKeyedNodeWhenReparented(t *testing.T) {
+	var mounts int
+	w := &fakeWidget{}
+	factory := func() Widget { mounts++; return w }
+
+	// Frame 1: P's direct children = [L] (L keyed "leaf").
+	frame1 := Box(layout.Vertical,
+		Child(layout.Fill(1), Component("leaf", nil, factory)),
+	)
+	r := reconcile(nil, frame1)
+	if mounts != 1 {
+		t.Fatalf("mounts after initial reconcile = %d, want 1", mounts)
+	}
+	leaf := r.children[0]
+	if leaf.widget != Widget(w) {
+		t.Fatal("initial mount didn't wire up the expected widget instance")
+	}
+
+	// Frame 2: P's direct children = [S], S wraps [L, N] -- L keeps its
+	// key but now lives one level deeper, under a brand-new wrapper Box
+	// that's new to P.
+	frame2 := Box(layout.Vertical,
+		Child(layout.Fill(1), Box(layout.Horizontal,
+			Child(layout.Fill(1), Component("leaf", nil, factory)),
+			Child(layout.Fill(1), Component("new", nil, func() Widget { return &fakeWidget{} })),
+		).Key("wrapper")),
+	)
+	r = reconcile(r, frame2)
+
+	if mounts != 1 {
+		t.Fatalf("mounts after reparenting = %d, want still 1 (factory must not run again for the reparented leaf)", mounts)
+	}
+	wrapper := r.children[0]
+	if wrapper.key != "wrapper" || wrapper.kind != kindBox {
+		t.Fatalf("expected the new wrapper Box in place, got kind=%v key=%v", wrapper.kind, wrapper.key)
+	}
+	if wrapper.children[0] != leaf || wrapper.children[0].widget != Widget(w) {
+		t.Fatal("expected the leaf's retained node and widget instance to be reused inside its new parent, not rebuilt")
+	}
+	if w.reconciles != 2 {
+		t.Errorf("leaf widget should have been Reconciled twice (once per frame), got %d", w.reconciles)
+	}
+}
+
+// TestReconcileChildrenReusesKeyedNodeWhenUnparented covers the
+// opposite direction from the split case above: a keyed subtree
+// pulled one level shallower (unsplitting a pane back to a plain
+// sibling) should reuse the same retained state too, not just the
+// nesting-deeper direction.
+func TestReconcileChildrenReusesKeyedNodeWhenUnparented(t *testing.T) {
+	var mounts int
+	w := &fakeWidget{}
+	factory := func() Widget { mounts++; return w }
+
+	frame1 := Box(layout.Vertical,
+		Child(layout.Fill(1), Box(layout.Horizontal,
+			Child(layout.Fill(1), Component("leaf", nil, factory)),
+			Child(layout.Fill(1), Component("other", nil, func() Widget { return &fakeWidget{} })),
+		).Key("wrapper")),
+	)
+	r := reconcile(nil, frame1)
+	if mounts != 1 {
+		t.Fatalf("mounts after initial reconcile = %d, want 1", mounts)
+	}
+
+	frame2 := Box(layout.Vertical,
+		Child(layout.Fill(1), Component("leaf", nil, factory)),
+	)
+	r = reconcile(r, frame2)
+
+	if mounts != 1 {
+		t.Fatalf("mounts after unparenting = %d, want still 1 (factory must not run again for the surfaced leaf)", mounts)
+	}
+	if r.children[0].widget != Widget(w) {
+		t.Fatal("expected the leaf's widget instance to be reused directly under the outer Box, not rebuilt")
+	}
+}
+
+// TestReconcileChildrenKeyCollisionMountsSecondSlotFresh checks the
+// safety net called out in reconciler-cross-parent-key-reuse.md's
+// "collision risk" open question: if next carries the same key at two
+// different slots (a caller bug, but one the previous per-parent-only
+// matching couldn't even express since a duplicate key could only
+// collide within one parent's own list), the whole-tree fallback must
+// not let both slots alias the same retained node and Widget instance
+// into two tree positions. The first slot visited claims it; the
+// second mounts its own fresh widget instead.
+func TestReconcileChildrenKeyCollisionMountsSecondSlotFresh(t *testing.T) {
+	var mounted []*fakeWidget
+	factory := func() Widget {
+		w := &fakeWidget{}
+		mounted = append(mounted, w)
+		return w
+	}
+
+	frame1 := Box(layout.Vertical,
+		Child(layout.Fill(1), Component("dup", nil, factory)),
+	)
+	r := reconcile(nil, frame1)
+	first := r.children[0]
+
+	frame2 := Box(layout.Vertical,
+		Child(layout.Fill(1), Box(layout.Horizontal,
+			Child(layout.Fill(1), Component("dup", nil, factory)),
+			Child(layout.Fill(1), Component("dup", nil, factory)),
+		).Key("wrapper")),
+	)
+	r = reconcile(r, frame2)
+
+	slotA, slotB := r.children[0].children[0], r.children[0].children[1]
+	if slotA == slotB {
+		t.Fatal("two next slots sharing a key must not resolve to the same retained node")
+	}
+	if slotA != first {
+		t.Error("first slot visited should reuse the previously retained node")
+	}
+	if slotB.widget != Widget(mounted[len(mounted)-1]) {
+		t.Error("second slot should mount its own fresh widget instead of aliasing the first slot's")
+	}
+}
+
 func TestCollectFocusablesInDocumentOrder(t *testing.T) {
 	wA := &fakeWidget{focusable: true}
 	wB := &fakeWidget{focusable: false}

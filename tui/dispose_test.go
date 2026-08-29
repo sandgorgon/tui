@@ -60,6 +60,35 @@ func TestReconcileSameKindDoesNotDispose(t *testing.T) {
 	}
 }
 
+// TestReconcileReparentingDoesNotDisposeReusedWidget is the issue #3 /
+// reconciler-cross-parent-key-reuse.md scenario end to end: splitting
+// a pane wraps its live widget one level deeper under a brand-new
+// sibling Box. The widget must survive (not get Closed) since it's
+// still present, just reparented -- for a real widget.Terminal this is
+// what keeps its pty alive across a split instead of killing it.
+func TestReconcileReparentingDoesNotDisposeReusedWidget(t *testing.T) {
+	cw := &closerWidget{}
+	frame1 := Box(layout.Vertical,
+		Child(layout.Fill(1), Component("leaf", nil, func() Widget { return cw })),
+	)
+	r := reconcile(nil, frame1)
+
+	frame2 := Box(layout.Vertical,
+		Child(layout.Fill(1), Box(layout.Horizontal,
+			Child(layout.Fill(1), Component("leaf", nil, func() Widget { return cw })),
+			Child(layout.Fill(1), Component("new", nil, func() Widget { return &fakeWidget{} })),
+		).Key("wrapper")),
+	)
+	r = reconcile(r, frame2)
+
+	if cw.closed {
+		t.Fatal("reparented widget should not have been Closed -- it's still live, just moved to a new parent")
+	}
+	if r.children[0].children[0].widget != Widget(cw) {
+		t.Fatal("expected the reparented widget instance in its new position")
+	}
+}
+
 func TestFocusableCloseDisposesChild(t *testing.T) {
 	cw := &closerWidget{}
 	child := Component("inner", nil, func() Widget { return cw })

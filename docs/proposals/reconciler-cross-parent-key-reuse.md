@@ -1,10 +1,12 @@
 # Proposal: let an explicit Key survive a subtree moving to a new parent
 
-Status: **proposed, not yet implemented** — filed as
-[#3](https://github.com/sandgorgon/tui/issues/3) by the maintainer,
-surfaced building 9sh (a pane-splitting terminal multiplexer) on top of
-`tui.App`. Not a commitment to build as described below; the issue
-itself asks for discussion on shape before committing to an approach.
+Status: **accepted and implemented**, `a48b9d6` on `develop` (not yet
+released). Filed as [#3](https://github.com/sandgorgon/tui/issues/3)
+by the maintainer, surfaced building 9sh (a pane-splitting terminal
+multiplexer) on top of `tui.App`. Implemented exactly as proposed
+below: the existing `Key()` reused as a whole-tree fallback, no new
+API. See `docs/DESIGN.md`'s reconciler changelog entry for the
+implementation writeup.
 
 ## Problem
 

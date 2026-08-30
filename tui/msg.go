@@ -64,6 +64,24 @@ func CopyToClipboard(text string) Cmd {
 	return func() Msg { return ClipboardMsg{Text: text} }
 }
 
+// FocusMsg, produced by SetFocusCmd, tells Run to move focus to Index
+// via the App's own SetFocus (see app.go) — the same index space
+// FocusIndex/SetFocus already use, and the same silent-no-op behavior
+// on an out-of-range Index.
+type FocusMsg struct{ Index int }
+
+// SetFocusCmd is a Cmd that moves focus to idx, the missing
+// during-Run() counterpart to calling App.SetFocus directly (only
+// usable by code holding *App before Run starts). Returning it from
+// Update (`return m, tui.SetFocusCmd(idx)`, the same shape as Quit()
+// and CopyToClipboard()) lets application logic — not just literal
+// Tab/click input — move focus in a live session: a numbered tab-jump
+// hotkey, restoring focus after a modal closes, a wizard advancing to
+// its next field, and so on.
+func SetFocusCmd(idx int) Cmd {
+	return func() Msg { return FocusMsg{Index: idx} }
+}
+
 // BatchMsg, produced by Batch, tells the App to run each Cmd
 // concurrently rather than treating BatchMsg itself as an application
 // Msg — Update never sees a BatchMsg.

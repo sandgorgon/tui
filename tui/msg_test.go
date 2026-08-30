@@ -20,6 +20,17 @@ func TestCopyToClipboard(t *testing.T) {
 	}
 }
 
+func TestSetFocusCmd(t *testing.T) {
+	msg := SetFocusCmd(3)()
+	fm, ok := msg.(FocusMsg)
+	if !ok {
+		t.Fatalf("SetFocusCmd(3)() = %#v (%T), want FocusMsg", msg, msg)
+	}
+	if fm.Index != 3 {
+		t.Errorf("FocusMsg.Index = %d, want 3", fm.Index)
+	}
+}
+
 func TestBatchEmpty(t *testing.T) {
 	if Batch() != nil {
 		t.Error("Batch() with no cmds should be nil")

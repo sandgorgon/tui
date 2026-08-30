@@ -300,7 +300,10 @@ func (a *App) moveFocus(forward bool) {
 // package render. A ClipboardMsg (see CopyToClipboard) is handled here
 // too — written directly rather than passed to Dispatch, since Run's
 // own goroutine is the only place it's safe to write it without
-// interleaving with render output on the same stdout. It exercises the
+// interleaving with render output on the same stdout. Likewise a
+// FocusMsg (see SetFocusCmd) is applied here via SetFocus rather than
+// passed to Dispatch, since SetFocus touches App's own private focus
+// state the same way ClipboardMsg's write touches stdout. It exercises the
 // same pty-free real-terminal setup established by examples/rawecho
 // and examples/multiplexer (M1/M6): MakeRaw, capability probing, a
 // Watcher for resize/resume, and an input.Decoder goroutine fed
@@ -404,6 +407,13 @@ func (a *App) Run() error {
 				// from whatever Cmd produced this Msg — see
 				// CopyToClipboard's doc comment on why that matters.
 				_ = term.WriteClipboard(os.Stdout, m.Text)
+			case FocusMsg:
+				// SetFocus itself only updates a.buf (via render()); it
+				// doesn't flush to the terminal, so this needs the same
+				// explicit redraw() the "ev := <-events" case above
+				// takes after HandleInput.
+				a.SetFocus(m.Index)
+				redraw()
 			default:
 				runCmd(a.Dispatch(msg))
 				redraw()

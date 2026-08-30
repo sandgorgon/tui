@@ -130,6 +130,47 @@ func TestAppHandleInputRoutesToFocusedWidgetAndModel(t *testing.T) {
 	}
 }
 
+func TestAppSetFocus(t *testing.T) {
+	m := &focusTestModel{}
+	a := NewApp(m, 10, 3)
+
+	if got := a.FocusIndex(); got != 0 {
+		t.Fatalf("initial FocusIndex = %d, want 0", got)
+	}
+
+	if ok := a.SetFocus(1); !ok {
+		t.Fatal("SetFocus(1) = false, want true")
+	}
+	if got := a.FocusIndex(); got != 1 {
+		t.Fatalf("FocusIndex after SetFocus(1) = %d, want 1", got)
+	}
+
+	cmds := a.HandleInput(input.KeyEvent{Rune: 'y'})
+	if got := cmds[0](); got != "right" {
+		t.Errorf("cmds[0]() after SetFocus(1) = %v, want %q", got, "right")
+	}
+
+	if ok := a.SetFocus(2); ok {
+		t.Error("SetFocus(2) = true, want false (only 2 focusables)")
+	}
+	if ok := a.SetFocus(-1); ok {
+		t.Error("SetFocus(-1) = true, want false")
+	}
+	if got := a.FocusIndex(); got != 1 {
+		t.Errorf("FocusIndex after out-of-range SetFocus = %d, want unchanged 1", got)
+	}
+}
+
+func TestAppSetFocusWithNoFocusablesIsNoop(t *testing.T) {
+	a := NewApp(&counterModel{}, 10, 1)
+	if ok := a.SetFocus(0); ok {
+		t.Error("SetFocus(0) with no focusables = true, want false")
+	}
+	if got := a.FocusIndex(); got != 0 {
+		t.Errorf("FocusIndex = %d, want 0", got)
+	}
+}
+
 func TestAppTabWithNoFocusablesIsNoop(t *testing.T) {
 	a := NewApp(&counterModel{}, 10, 1)
 	if cmds := a.HandleInput(input.KeyEvent{Key: input.KeyTab}); cmds != nil {

@@ -38,6 +38,31 @@ type TextAreaOptions struct {
 	// other prop; nil means no overrides.
 	Highlights []StyleSpan
 
+	// InitialCursor, if non-nil, places the cursor at this rune offset
+	// into Value when the field mounts, instead of the end of Value
+	// (the nil/default behavior) — e.g. jumping to a specific line/
+	// column when opening an existing document. Read once at mount,
+	// like Value; the pointed-to value is clamped to
+	// [0, len([]rune(Value))]. A pointer (not a plain int) because 0 is
+	// itself a meaningful offset (start of the field) distinct from
+	// "unset" — a plain int couldn't tell "place the cursor at the
+	// start" apart from "caller didn't set this."
+	InitialCursor *int
+
+	// Gutter, if non-nil, paints a fixed-width column to the left of
+	// each visible line's text — e.g. a line number ("42") or a
+	// single-glyph diagnostic marker. Called once per visible row each
+	// frame (not once per document line), so a caller deriving it from
+	// something dynamic (search results, diff state) stays cheap even
+	// on a large document. The column's width is the widest string
+	// returned across the currently visible rows, plus one separator
+	// column, so it can change frame to frame as the document scrolls;
+	// strings are right-aligned within it, space-padded on the left.
+	// A row whose Gutter string doesn't fit the visible height (there
+	// is none — Gutter is only ever asked about in-range lineIdx
+	// values) never occurs.
+	Gutter func(lineIdx int) (string, cell.Style)
+
 	// OnChange, if non-nil, is called with the field's current content
 	// after every edit.
 	OnChange func(value string) tui.Msg
@@ -95,6 +120,9 @@ func (w *textAreaWidget) Reconcile(props any) bool {
 	if !w.mounted {
 		w.mounted = true
 		w.mount(w.opts.Value)
+		if w.opts.InitialCursor != nil {
+			w.cursor = clampCursor(*w.opts.InitialCursor, len(w.buf))
+		}
 	}
 	return true
 }
@@ -186,6 +214,66 @@ func lineIndexOf(lines []textLine, pos int) int {
 	return len(lines) - 1
 }
 
+// gutterTextWidth returns s's on-screen column width, matching
+// visualWidth's wide-rune handling.
+func gutterTextWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		w += runeCols(r)
+	}
+	return w
+}
+
+// gutterWidth returns the fixed column width this frame's visible
+// rows need for gutter — the widest string any of them returns, plus
+// one separator column — or 0 if gutter is nil or every visible row's
+// string is empty. Recomputed each frame from only the rows actually
+// on screen (lineIdx in [scrollRow, scrollRow+innerH)), not the whole
+// document, so a caller deriving Gutter from something dynamic stays
+// cheap even on a large document.
+func gutterWidth(gutter func(int) (string, cell.Style), lineCount, scrollRow, innerH int) int {
+	if gutter == nil {
+		return 0
+	}
+	maxW := 0
+	for row := range innerH {
+		lineIdx := scrollRow + row
+		if lineIdx >= lineCount {
+			break
+		}
+		text, _ := gutter(lineIdx)
+		if w := gutterTextWidth(text); w > maxW {
+			maxW = w
+		}
+	}
+	if maxW == 0 {
+		return 0
+	}
+	return maxW + 1
+}
+
+// paintGutterRow right-aligns gutter's string for lineIdx within
+// columns [0,gutterW) of row row — gutterW-1 columns of (space-padded)
+// text plus one trailing blank separator column, matching
+// gutterWidth's "widest string plus one" accounting. muted is the
+// style for padding and the separator column; the string itself
+// paints in whatever style gutter returns for it.
+func paintGutterRow(p *cell.Painter, gutter func(int) (string, cell.Style), lineIdx, row, gutterW int, muted cell.Style) {
+	text, style := gutter(lineIdx)
+	textW := gutterTextWidth(text)
+	col := 0
+	for ; col < gutterW-1-textW; col++ {
+		p.SetCell(col, row, ' ', muted)
+	}
+	for _, r := range text {
+		p.SetCell(col, row, r, style)
+		col += runeCols(r)
+	}
+	for ; col < gutterW; col++ {
+		p.SetCell(col, row, ' ', muted)
+	}
+}
+
 func (w *textAreaWidget) Paint(p *cell.Painter) {
 	width, height := p.Size()
 	if width < 2 || height < 2 {
@@ -206,11 +294,17 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 	w.lastVisibleLines = innerH
 
 	if len(w.buf) == 0 {
+		gutterW := gutterWidth(w.opts.Gutter, 1, 0, 1)
+		if gutterW > 0 && gutterW < innerW {
+			paintGutterRow(inner, w.opts.Gutter, 0, 0, gutterW, w.opts.Theme.MutedText())
+		} else {
+			gutterW = 0
+		}
 		if w.opts.Placeholder != "" {
-			inner.Text(0, 0, w.opts.Placeholder, w.opts.Theme.MutedText())
+			inner.Text(gutterW, 0, w.opts.Placeholder, w.opts.Theme.MutedText())
 		}
 		if w.focused {
-			inner.SetCell(0, 0, ' ', cell.Style{Attr: cell.AttrReverse})
+			inner.SetCell(gutterW, 0, ' ', cell.Style{Attr: cell.AttrReverse})
 		}
 		return
 	}
@@ -220,11 +314,18 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 	cursorCol := visualWidth(w.buf, lines[cursorLine].start, w.cursor)
 
 	w.scrollRow = clampScroll(w.scrollRow, cursorLine, len(lines), innerH)
+
+	gutterW := gutterWidth(w.opts.Gutter, len(lines), w.scrollRow, innerH)
+	textW := innerW - gutterW
+	if textW < 1 {
+		gutterW, textW = 0, innerW
+	}
+
 	switch {
 	case cursorCol < w.scrollCol:
 		w.scrollCol = cursorCol
-	case cursorCol >= w.scrollCol+innerW:
-		w.scrollCol = cursorCol - innerW + 1
+	case cursorCol >= w.scrollCol+textW:
+		w.scrollCol = cursorCol - textW + 1
 	}
 	if w.scrollCol < 0 {
 		w.scrollCol = 0
@@ -237,6 +338,9 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 		lineIdx := w.scrollRow + row
 		if lineIdx >= len(lines) {
 			break
+		}
+		if gutterW > 0 {
+			paintGutterRow(inner, w.opts.Gutter, lineIdx, row, gutterW, w.opts.Theme.MutedText())
 		}
 		ln := lines[lineIdx]
 		// A line entirely swept by the selection (selection starts at
@@ -276,10 +380,10 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 		// forward (not per-cell binary search) within the row, since idx
 		// is monotonic there.
 		spanIdx := sort.Search(len(spans), func(i int) bool { return spans[i].End > idx })
-		for screenCol := 0; screenCol < innerW; {
+		for screenCol := 0; screenCol < textW; {
 			if gap := col - w.scrollCol; gap > screenCol {
 				style := highlightStyle(defaultStyle, w.focused, lineFullySelected, false)
-				inner.SetCell(screenCol, row, ' ', style)
+				inner.SetCell(gutterW+screenCol, row, ' ', style)
 				screenCol++
 				continue
 			}
@@ -291,14 +395,14 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 				r = w.buf[idx]
 				width = runeCols(r)
 			}
-			if screenCol+width > innerW {
+			if screenCol+width > textW {
 				// A wide rune that would only half-fit at the row's
 				// right edge: cell.Painter.SetCell won't draw it at all
 				// (see its own doc comment), but this column still needs
 				// *some* explicit content this frame, or a stale cell
 				// from a previous frame survives undrawn.
 				style := highlightStyle(defaultStyle, w.focused, lineFullySelected, false)
-				inner.SetCell(screenCol, row, ' ', style)
+				inner.SetCell(gutterW+screenCol, row, ' ', style)
 				screenCol++
 				continue
 			}
@@ -311,7 +415,7 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 			}
 			inSel := lineFullySelected || (hasSel && !atEnd && idx >= selStart && idx < selEnd)
 			style := highlightStyle(base, w.focused, inSel, idx == w.cursor && idx <= ln.end)
-			inner.SetCell(screenCol, row, r, style)
+			inner.SetCell(gutterW+screenCol, row, r, style)
 
 			screenCol += width
 			col += width

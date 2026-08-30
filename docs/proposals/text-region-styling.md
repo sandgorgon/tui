@@ -1,8 +1,14 @@
 # Proposal: per-line / per-region styling for TextArea and List
 
-Status: proposal, not accepted. Filed by a consumer (kaze) for
-consideration whenever this repo's own maintainer picks it up — not a
-commitment to build it, and not built here.
+Status: **partially done.** Filed by a consumer (kaze) for
+consideration whenever this repo's own maintainer picks it up — option
+2 (general per-position styling) was accepted and implemented as
+`TextAreaOptions.Highlights`/`ListOptions.RowStyles` (see
+`docs/DESIGN.md` §9, "Per-region styling for `TextArea`/`List`"). A
+string-returning variant of option 3 (below) was also implemented,
+via [#11](https://github.com/sandgorgon/tui/issues/11) — see
+`docs/DESIGN.md` §9, "`TextArea`: initial cursor offset and a
+line-number gutter."
 
 ## Problem
 
@@ -93,6 +99,18 @@ input, which any of these would extend).
    interaction with existing selection/cursor code). Sufficient for a
    binary/enum-state indicator (a colored dot per line) if full-line or
    full-region recoloring isn't wanted.
+
+   **Implemented as a string-returning variant, not this rune-returning
+   shape** — see [#11](https://github.com/sandgorgon/tui/issues/11):
+   `TextAreaOptions.Gutter func(lineIdx int) (string, cell.Style)`,
+   right-aligned in a column sized to the widest string across the
+   currently visible rows plus one separator column. #11 pointed out
+   this rune-only shape can't render a line *number* ("245" is three
+   characters), which is at least as common a use as the single-glyph
+   marker case this option was originally scoped for — and the
+   single-rune case is still trivially served by a one-character
+   string, so the string variant subsumes this one at no extra cost to
+   callers who only need a marker.
 
 **Recommendation**: (2), general per-position styling, as the most
 reusable investment — it subsumes (1) and enables real syntax

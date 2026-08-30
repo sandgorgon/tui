@@ -1,6 +1,7 @@
 package widget
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -445,5 +446,129 @@ func TestTextAreaPlaceholderShownWhenEmpty(t *testing.T) {
 	paintNode(t, node, buf)
 	if !strings.Contains(buf.String(), "type here") {
 		t.Errorf("Buffer = %q, want to contain placeholder", buf.String())
+	}
+}
+
+func TestTextAreaInitialCursorPlacesCursorAtOffset(t *testing.T) {
+	cursor := 3
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "abcdef", InitialCursor: &cursor})
+	app.HandleInput(input.KeyEvent{Rune: 'X'})
+	if *value != "abcXdef" {
+		t.Fatalf("value = %q, want %q (typed char should land at InitialCursor's offset)", *value, "abcXdef")
+	}
+}
+
+func TestTextAreaInitialCursorNilKeepsEndOfTextDefault(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "abc"})
+	app.HandleInput(input.KeyEvent{Rune: 'X'})
+	if *value != "abcX" {
+		t.Fatalf("value = %q, want %q (nil InitialCursor must keep the old end-of-text default)", *value, "abcX")
+	}
+}
+
+func TestTextAreaInitialCursorClampsPastEnd(t *testing.T) {
+	cursor := 100
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "abc", InitialCursor: &cursor})
+	app.HandleInput(input.KeyEvent{Rune: 'X'})
+	if *value != "abcX" {
+		t.Fatalf("value = %q, want %q (out-of-range InitialCursor should clamp to len(Value))", *value, "abcX")
+	}
+}
+
+func TestTextAreaGutterShowsLineNumbersAndShiftsContent(t *testing.T) {
+	node := TextArea(TextAreaOptions{
+		Theme: style.DefaultDark(),
+		Value: "one\ntwo\nthree",
+		Gutter: func(lineIdx int) (string, cell.Style) {
+			return strconv.Itoa(lineIdx + 1), style.DefaultDark().MutedText()
+		},
+	})
+	buf := cell.NewBuffer(12, 6)
+	paintNode(t, node, buf)
+
+	// Single-digit line numbers: gutter column is 2 wide (1 digit + 1
+	// separator), so the digit sits at inner-relative column 0 (absolute
+	// x=1) and content starts at absolute x=3.
+	for row, want := range map[int]rune{1: '1', 2: '2', 3: '3'} {
+		if got := buf.At(1, row).Rune; got != want {
+			t.Errorf("At(1,%d) = %q, want gutter digit %q", row, got, want)
+		}
+	}
+	if got := buf.At(3, 1).Rune; got != 'o' {
+		t.Errorf("At(3,1) = %q, want content 'o' (of \"one\") shifted past the gutter column", got)
+	}
+	if got := buf.At(3, 2).Rune; got != 't' {
+		t.Errorf("At(3,2) = %q, want content 't' (of \"two\") shifted past the gutter column", got)
+	}
+}
+
+func TestTextAreaGutterRightAlignsAndPadsToWidestVisibleRow(t *testing.T) {
+	node := TextArea(TextAreaOptions{
+		Theme: style.DefaultDark(),
+		Value: "a\nb",
+		Gutter: func(lineIdx int) (string, cell.Style) {
+			if lineIdx == 0 {
+				return "1", style.DefaultDark().MutedText()
+			}
+			return "22", style.DefaultDark().MutedText()
+		},
+	})
+	buf := cell.NewBuffer(12, 6)
+	paintNode(t, node, buf)
+
+	// Widest visible row is "22" (width 2), so the gutter column is 3
+	// wide (2 text + 1 separator): "1" pads left with a space to fill
+	// the 2-wide text field, "22" fills it exactly, and both rows share
+	// one blank separator column before content.
+	if got := buf.At(1, 1).Rune; got != ' ' {
+		t.Errorf("At(1,1) = %q, want left-pad space before the short \"1\"", got)
+	}
+	if got := buf.At(2, 1).Rune; got != '1' {
+		t.Errorf("At(2,1) = %q, want '1' right-aligned in the gutter column", got)
+	}
+	if got := buf.At(3, 1).Rune; got != ' ' {
+		t.Errorf("At(3,1) = %q, want the separator column blank", got)
+	}
+	if got := buf.At(4, 1).Rune; got != 'a' {
+		t.Errorf("At(4,1) = %q, want content 'a' past the gutter", got)
+	}
+
+	if got := buf.At(1, 2).Rune; got != '2' {
+		t.Errorf("At(1,2) = %q, want '2' (first digit of \"22\", no padding needed)", got)
+	}
+	if got := buf.At(2, 2).Rune; got != '2' {
+		t.Errorf("At(2,2) = %q, want '2' (second digit of \"22\")", got)
+	}
+	if got := buf.At(4, 2).Rune; got != 'b' {
+		t.Errorf("At(4,2) = %q, want content 'b' past the gutter", got)
+	}
+}
+
+func TestTextAreaGutterShownWhenBufferEmpty(t *testing.T) {
+	node := TextArea(TextAreaOptions{
+		Theme:       style.DefaultDark(),
+		Placeholder: "type here",
+		Gutter: func(lineIdx int) (string, cell.Style) {
+			return "1", style.DefaultDark().MutedText()
+		},
+	})
+	buf := cell.NewBuffer(14, 5)
+	paintNode(t, node, buf)
+
+	if got := buf.At(1, 1).Rune; got != '1' {
+		t.Errorf("At(1,1) = %q, want the gutter digit for the (empty) first line", got)
+	}
+	if got := buf.At(3, 1).Rune; got != 't' {
+		t.Errorf("At(3,1) = %q, want placeholder text shifted past the gutter column", got)
+	}
+}
+
+func TestTextAreaNilGutterAddsNoColumn(t *testing.T) {
+	node := TextArea(TextAreaOptions{Theme: style.DefaultDark(), Value: "one"})
+	buf := cell.NewBuffer(12, 5)
+	paintNode(t, node, buf)
+
+	if got := buf.At(1, 1).Rune; got != 'o' {
+		t.Errorf("At(1,1) = %q, want content starting right after the border with no Gutter set", got)
 	}
 }

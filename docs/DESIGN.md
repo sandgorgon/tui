@@ -726,6 +726,37 @@ rather than being a late add-on.
   `io.Closer` widget is never disposed); `go build/vet/test -race`
   clean across the whole repo.
 
+- **`TextArea`: initial cursor offset and a line-number gutter — done.**
+  Filed as [#11](https://github.com/sandgorgon/tui/issues/11), surfaced
+  designing 9ed's "go to a line number" and "show line numbers"
+  features. Two independent additions to `TextAreaOptions`:
+  `InitialCursor *int` places the cursor at a rune offset into `Value`
+  when the field mounts (clamped to `[0, len(value)]`), instead of
+  `mount`'s existing end-of-text default — a pointer, not a plain
+  `int`, because 0 is itself a meaningful offset distinct from "not
+  set." `Gutter func(lineIdx int) (string, cell.Style)` paints a
+  right-aligned column to the left of each visible line, sized to the
+  widest string returned across the *currently visible* rows plus one
+  separator column (not the whole document — recomputed every frame
+  from `scrollRow`/`innerH` alone, so a caller deriving it from
+  something dynamic stays cheap on a large document, matching the
+  scoping rationale already used for `Highlights`' per-row span
+  lookup above). This supersedes the single-rune `Gutter` shape
+  `docs/proposals/text-region-styling.md` had proposed (option 3) but
+  never implemented: #11 showed even that originally-proposed shape
+  was already insufficient for a 3-digit line number, so the string
+  variant was implemented directly rather than shipping the rune
+  version first. `Paint`'s existing column math (`scrollCol`,
+  `columnToIndex`, the row-paint loop) now runs against `textW`
+  (`innerW` minus the gutter's width) with every `SetCell` offset by
+  `gutterW`, rather than against `innerW` directly — the empty-buffer/
+  placeholder branch got the same treatment so a lone gutter cell still
+  shows for an empty document. 7 new tests in `widget/textarea_test.go`
+  (offset placement, nil-default preserved, out-of-range clamping,
+  line-number rendering, right-alignment/padding to the widest visible
+  row, the empty-buffer case, and a nil-`Gutter` no-op regression check);
+  `go build/vet/gofmt/test` clean across the whole repo.
+
 ---
 
 ## 10. Testing strategy

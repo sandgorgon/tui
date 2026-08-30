@@ -256,6 +256,31 @@ func (a *App) rawKeyClaim() (claims bool, releaseKey input.KeyEvent) {
 	return true, rc.ReleaseKey()
 }
 
+// FocusIndex returns the index into the current focus order (document
+// order over the tree View produced for the last render) of the
+// currently focused widget, or 0 if there are no focusables.
+func (a *App) FocusIndex() int { return a.focusIdx }
+
+// SetFocus moves focus directly to the focusable at idx, the same
+// index space FocusIndex reports and the same order the ordinary Tab/
+// Shift+Tab traversal (moveFocus) walks. It reports whether idx was in
+// range; out of range (including when there are no focusables at all)
+// is a no-op returning false, matching moveFocus's own defensive
+// len(a.focusables) == 0 check rather than panicking.
+//
+// The reassignment is unconditional, mirroring HandleInput's mouse-
+// click branch: a widget mid-raw-key-claim (RawKeyClaimer, see
+// rawkey.go) is not given any chance to react before losing focus,
+// exactly as clicking away from it already doesn't.
+func (a *App) SetFocus(idx int) bool {
+	if idx < 0 || idx >= len(a.focusables) {
+		return false
+	}
+	a.focusIdx = idx
+	a.render()
+	return true
+}
+
 func (a *App) moveFocus(forward bool) {
 	if len(a.focusables) == 0 {
 		return

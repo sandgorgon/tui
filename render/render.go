@@ -77,15 +77,43 @@ func NewRenderer(opts Options) *Renderer {
 // front for the next call. It writes nothing at all if there's no
 // difference to report.
 func (r *Renderer) Render(w io.Writer, back *cell.Buffer, cursorX, cursorY int, cursorVisible bool) error {
-	if r.front == nil || r.front.Width != back.Width || r.front.Height != back.Height {
+	resized := r.front == nil || r.front.Width != back.Width || r.front.Height != back.Height
+	if resized {
 		r.front = cell.NewBuffer(back.Width, back.Height)
 		r.cursorX, r.cursorY = -1, -1
-		r.curStyle = cell.Style{}
 	}
 
 	r.buf = r.buf[:0]
 	if r.opts.SynchronizedOutput {
 		r.buf = append(r.buf, "\x1b[?2026h"...)
+	}
+
+	if resized {
+		// front was just reset to blank on the assumption that's what
+		// the real terminal shows here too. That assumption only holds
+		// on the very first frame (into a freshly entered alt screen);
+		// on a genuine size change, a real terminal does NOT clear its
+		// existing content on its own (confirmed on VTE/gnome-terminal),
+		// so without this, any cell blank in both the reset front and
+		// the new back frame is skipped as "already correct" and stale
+		// pixels from a differently-sized previous frame keep showing
+		// through. Erase explicitly rather than relying on front's
+		// reset value to stand in for the terminal's real content.
+		//
+		// Erase in Display paints its blanks using the terminal's
+		// current graphic rendition (real terminals do this so programs
+		// can paint colored blank areas), not some assumed default, so
+		// reset that rendition first — otherwise a cell last written in
+		// a bright color would erase to a bright blank instead of a
+		// plain one.
+		if !styleEqualSGR(cell.Style{}, r.curStyle) {
+			r.buf = appendSGRDiff(r.buf, r.curStyle, cell.Style{}, r.opts.ColorLevel)
+		}
+		if r.curStyle.Hyperlink != "" {
+			r.buf = appendHyperlink(r.buf, "")
+		}
+		r.curStyle = cell.Style{}
+		r.buf = append(r.buf, "\x1b[2J"...)
 	}
 
 	threshold := r.opts.mergeThreshold()

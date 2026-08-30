@@ -178,6 +178,56 @@ func TestRoundTripIncrementalFrames(t *testing.T) {
 	frame(f3)
 }
 
+// TestRoundTripResizeErasesStaleContent models a real terminal resize:
+// unlike testutil.RoundTrip (a fresh vt.Screen every call, which can
+// never show stale content from a size it never was) or
+// TestRoundTripIncrementalFrames (never changes size), it resizes the
+// same persistent Screen with vt.Screen.Resize — which, matching real
+// terminal behavior, preserves existing content rather than clearing
+// it. That's what exposed the real bug this guards: Renderer.Render
+// resetting its own bookkeeping of "what the terminal shows" to blank
+// on a size change without telling the real terminal to actually erase
+// anything, so a cell blank in both the new frame and the reset
+// bookkeeping was wrongly assumed already correct and left whatever a
+// differently-sized previous frame had painted there.
+func TestRoundTripResizeErasesStaleContent(t *testing.T) {
+	r := render.NewRenderer(render.Options{ColorLevel: term.ColorTrueColor})
+	screen := vt.NewScreen(10, 2)
+	parser := vt.NewParser()
+
+	f1 := cell.NewBuffer(10, 2)
+	for y := range 2 {
+		for x := range 10 {
+			f1.Set(x, y, cell.Cell{Rune: 'X', Width: 1, Style: cell.Style{Fg: cell.ANSIColor(1)}})
+		}
+	}
+	var buf1 writeBuf
+	if err := r.Render(&buf1, f1, 0, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	parser.Feed(buf1.b, screen)
+
+	// Shrink, the way a real terminal resize would: existing content is
+	// preserved, not cleared.
+	screen.Resize(6, 2)
+
+	// The new frame is mostly blank at this size (as an app's own
+	// buffer commonly is: margins, gaps, a shorter line than before).
+	f2 := cell.NewBuffer(6, 2)
+	f2.Set(0, 0, cell.Cell{Rune: 'h', Width: 1})
+	f2.Set(1, 0, cell.Cell{Rune: 'i', Width: 1})
+
+	var buf2 writeBuf
+	if err := r.Render(&buf2, f2, 0, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	parser.Feed(buf2.b, screen)
+
+	if !testutil.BuffersEqual(f2, screen.Buffer()) {
+		t.Errorf("stale content survived the resize:\n%s", testutil.DiffBuffers(f2, screen.Buffer()))
+	}
+}
+
 type writeBuf struct{ b []byte }
 
 func (w *writeBuf) Write(p []byte) (int, error) {

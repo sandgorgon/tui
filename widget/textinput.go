@@ -88,7 +88,11 @@ func (w *textInputWidget) Paint(p *cell.Painter) {
 			inner.Text(0, 0, w.opts.Placeholder, w.opts.Theme.MutedText())
 		}
 		if w.focused {
-			inner.SetCell(0, 0, ' ', cell.Style{Attr: cell.AttrReverse})
+			r := ' '
+			if placeholder := []rune(w.opts.Placeholder); len(placeholder) > 0 {
+				r = placeholder[0]
+			}
+			inner.SetCell(0, 0, r, cell.Style{Attr: cell.AttrReverse})
 		}
 		return
 	}

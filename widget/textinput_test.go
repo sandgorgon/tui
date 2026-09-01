@@ -155,6 +155,17 @@ func TestTextInputPlaceholderShownWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestTextInputFocusedPlaceholderKeepsLeadingRune(t *testing.T) {
+	node := TextInput(TextInputOptions{Theme: style.DefaultDark(), Placeholder: "search..."})
+	tr := newTree(t, node)
+	tr.Focusables()[0].SetFocused(true)
+	buf := cell.NewBuffer(14, 3)
+	tr.Paint(cell.NewPainter(buf))
+	if !strings.Contains(buf.String(), "search...") {
+		t.Errorf("Buffer = %q, want to still contain the full placeholder while focused", buf.String())
+	}
+}
+
 func TestTextInputShiftArrowSelectsAndTypingReplaces(t *testing.T) {
 	var value string
 	app := textInputApp(t, TextInputOptions{

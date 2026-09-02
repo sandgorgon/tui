@@ -319,6 +319,117 @@ func TestTextAreaCtrlLeftRightJumpsWordBoundaries(t *testing.T) {
 	}
 }
 
+func TestTextAreaCtrlUpDownDoesNotMoveCursor(t *testing.T) {
+	// Regression test for #20: Ctrl+Up/Down fell through to plain
+	// Up/Down, unlike every other Ctrl-modified movement key
+	// (Left/Right/Home/End), silently moving the cursor a host app may
+	// be relying on being left alone (e.g. a global Ctrl+Up/Down
+	// keybinding of its own).
+	var offsets []int
+	m := &widgetHostModel{node: TextArea(TextAreaOptions{
+		Theme: style.DefaultDark(),
+		Value: "abc\ndef\nghi",
+		OnCursorChange: func(offset int) tui.Msg {
+			offsets = append(offsets, offset)
+			return nil
+		},
+	})}
+	app := tui.NewApp(m, 14, 6)
+
+	// Cursor mounts at the buffer's end (offset 11, start of "ghi"'s
+	// line). Plain Down first, to confirm the widget is otherwise
+	// working and OnCursorChange fires for a real vertical move.
+	app.HandleInput(input.KeyEvent{Key: input.KeyUp})
+	if want := []int{7}; !equalInts(offsets, want) {
+		t.Fatalf("offsets after plain Up = %v, want %v", offsets, want)
+	}
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyUp, Mod: input.ModCtrl})
+	app.HandleInput(input.KeyEvent{Key: input.KeyDown, Mod: input.ModCtrl})
+	if want := []int{7}; !equalInts(offsets, want) {
+		t.Fatalf("offsets after Ctrl+Up/Ctrl+Down = %v, want %v (unchanged — Ctrl+Up/Down must be a no-op)", offsets, want)
+	}
+
+	// Plain Down again confirms Ctrl+Up/Down didn't leave the widget in
+	// some broken state — normal vertical movement still works.
+	app.HandleInput(input.KeyEvent{Key: input.KeyDown})
+	if want := []int{7, 11}; !equalInts(offsets, want) {
+		t.Fatalf("offsets after trailing plain Down = %v, want %v", offsets, want)
+	}
+}
+
+func TestTextAreaCtrlPgUpPgDownDoesNotMoveCursor(t *testing.T) {
+	// Same bug class as #20's Up/Down, same fix: PgUp/PgDown had no
+	// ctrl guard either, so Ctrl+PgUp/PgDown fell through to plain
+	// paging — a combo browsers/editors conventionally reserve for
+	// tab-switching, so a host app needs TextArea to leave it alone.
+	var offsets []int
+	m := &widgetHostModel{node: TextArea(TextAreaOptions{
+		Theme: style.DefaultDark(),
+		Value: strings.Repeat("line\n", 20) + "end",
+		OnCursorChange: func(offset int) tui.Msg {
+			offsets = append(offsets, offset)
+			return nil
+		},
+	})}
+	app := tui.NewApp(m, 14, 6)
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyPgUp, Mod: input.ModCtrl})
+	app.HandleInput(input.KeyEvent{Key: input.KeyPgDown, Mod: input.ModCtrl})
+	if len(offsets) != 0 {
+		t.Fatalf("offsets after Ctrl+PgUp/Ctrl+PgDown = %v, want none (must be a no-op)", offsets)
+	}
+
+	// Plain PgUp confirms Ctrl+PgUp/PgDown didn't leave the widget in
+	// some broken state — normal paging still works.
+	app.HandleInput(input.KeyEvent{Key: input.KeyPgUp})
+	if len(offsets) != 1 {
+		t.Fatalf("offsets after plain PgUp = %v, want 1 entry", offsets)
+	}
+}
+
+func TestTextAreaCtrlBackspaceDeletesWordBackward(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "foo bar"})
+	// Cursor mounts at the end. Ctrl+Backspace should delete "bar"
+	// (the word immediately behind the cursor), not just one rune.
+	app.HandleInput(input.KeyEvent{Key: input.KeyBackspace, Mod: input.ModCtrl})
+	if *value != "foo " {
+		t.Fatalf("value = %q, want %q", *value, "foo ")
+	}
+
+	// A second Ctrl+Backspace should eat the trailing space and then
+	// "foo", landing at the start of the buffer.
+	app.HandleInput(input.KeyEvent{Key: input.KeyBackspace, Mod: input.ModCtrl})
+	if *value != "" {
+		t.Fatalf("value after second Ctrl+Backspace = %q, want %q", *value, "")
+	}
+}
+
+func TestTextAreaCtrlDeleteDeletesWordForward(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "foo bar"})
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome})
+	// From the start, Ctrl+Delete should delete "foo" (the word ahead
+	// of the cursor), leaving the space and "bar".
+	app.HandleInput(input.KeyEvent{Key: input.KeyDelete, Mod: input.ModCtrl})
+	if *value != " bar" {
+		t.Fatalf("value = %q, want %q", *value, " bar")
+	}
+}
+
+func TestTextAreaCtrlBackspaceDeletesSelectionInsteadOfWord(t *testing.T) {
+	// Matches plain Backspace/Delete's existing convention (see
+	// TestTextAreaBackspaceDeletesSelectionAcrossNewline): an active
+	// selection is deleted whole, the word-boundary math doesn't apply.
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "foo bar"})
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome})
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight, Mod: input.ModShift})
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight, Mod: input.ModShift}) // selects "fo"
+	app.HandleInput(input.KeyEvent{Key: input.KeyBackspace, Mod: input.ModCtrl})
+	if *value != "o bar" {
+		t.Fatalf("value = %q, want %q (Ctrl+Backspace should delete the selection, not a whole word)", *value, "o bar")
+	}
+}
+
 func TestTextAreaCtrlShiftRightSelectsWord(t *testing.T) {
 	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "foo bar"})
 	app.HandleInput(input.KeyEvent{Key: input.KeyHome})

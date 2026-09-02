@@ -485,6 +485,15 @@ func (w *textAreaWidget) handleKey(ke input.KeyEvent) bool {
 		w.moveTo(0, shift)
 	case ctrl && ke.Key == input.KeyEnd:
 		w.moveTo(len(w.buf), shift)
+	case ctrl && (ke.Key == input.KeyUp || ke.Key == input.KeyDown):
+		// Deliberately a no-op, not a fallthrough to plain Up/Down:
+		// this library assigns no meaning to Ctrl+Up/Down, unlike
+		// Ctrl+Left/Right/Home/End's word/buffer jumps above, so this
+		// key combo is genuinely left unclaimed rather than silently
+		// treated as a plain vertical move. A host app is free to bind
+		// Ctrl+Up/Down to its own behavior (e.g. switching which
+		// TextArea is focused) without TextArea also reacting to the
+		// same keystroke underneath it.
 
 	case ke.Key == input.KeyLeft:
 		w.moveHorizontal(-1, shift)

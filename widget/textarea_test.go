@@ -319,6 +319,45 @@ func TestTextAreaCtrlLeftRightJumpsWordBoundaries(t *testing.T) {
 	}
 }
 
+func TestTextAreaCtrlUpDownDoesNotMoveCursor(t *testing.T) {
+	// Regression test for #20: Ctrl+Up/Down fell through to plain
+	// Up/Down, unlike every other Ctrl-modified movement key
+	// (Left/Right/Home/End), silently moving the cursor a host app may
+	// be relying on being left alone (e.g. a global Ctrl+Up/Down
+	// keybinding of its own).
+	var offsets []int
+	m := &widgetHostModel{node: TextArea(TextAreaOptions{
+		Theme: style.DefaultDark(),
+		Value: "abc\ndef\nghi",
+		OnCursorChange: func(offset int) tui.Msg {
+			offsets = append(offsets, offset)
+			return nil
+		},
+	})}
+	app := tui.NewApp(m, 14, 6)
+
+	// Cursor mounts at the buffer's end (offset 11, start of "ghi"'s
+	// line). Plain Down first, to confirm the widget is otherwise
+	// working and OnCursorChange fires for a real vertical move.
+	app.HandleInput(input.KeyEvent{Key: input.KeyUp})
+	if want := []int{7}; !equalInts(offsets, want) {
+		t.Fatalf("offsets after plain Up = %v, want %v", offsets, want)
+	}
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyUp, Mod: input.ModCtrl})
+	app.HandleInput(input.KeyEvent{Key: input.KeyDown, Mod: input.ModCtrl})
+	if want := []int{7}; !equalInts(offsets, want) {
+		t.Fatalf("offsets after Ctrl+Up/Ctrl+Down = %v, want %v (unchanged — Ctrl+Up/Down must be a no-op)", offsets, want)
+	}
+
+	// Plain Down again confirms Ctrl+Up/Down didn't leave the widget in
+	// some broken state — normal vertical movement still works.
+	app.HandleInput(input.KeyEvent{Key: input.KeyDown})
+	if want := []int{7, 11}; !equalInts(offsets, want) {
+		t.Fatalf("offsets after trailing plain Down = %v, want %v", offsets, want)
+	}
+}
+
 func TestTextAreaCtrlShiftRightSelectsWord(t *testing.T) {
 	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "foo bar"})
 	app.HandleInput(input.KeyEvent{Key: input.KeyHome})

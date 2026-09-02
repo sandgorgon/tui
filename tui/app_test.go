@@ -210,3 +210,72 @@ func (m *initCmdModel) Init() Cmd {
 }
 func (m *initCmdModel) Update(msg Msg) (Model, Cmd) { return m, nil }
 func (m *initCmdModel) View() Node                  { return Text("", cell.Style{}) }
+
+// TestResolveWidgetCmdAppliesSynchronously is the regression test for
+// #18: a widget-sourced Cmd (the shape TextArea.OnCursorChange's
+// callback produces) must land in Model.Update before
+// resolveWidgetCmd returns, with no async goroutine/channel hop in
+// between — that hop had no ordering guarantee against a caller's own
+// later, synchronous Dispatch call, which is exactly the race #18
+// reported (a jump to another card observing a stale cursor offset).
+func TestResolveWidgetCmdAppliesSynchronously(t *testing.T) {
+	m := &focusTestModel{}
+	a := NewApp(m, 10, 3)
+	m.seen = nil // drop the initial View-triggered noise, if any
+
+	cmd := func() Msg { return "cursor-moved" }
+	if follow := a.resolveWidgetCmd(cmd); follow != nil {
+		t.Fatalf("resolveWidgetCmd follow-up = %v, want nil (focusTestModel.Update returns no Cmd)", follow)
+	}
+
+	if len(m.seen) != 1 || m.seen[0] != "cursor-moved" {
+		t.Fatalf("Model.Update saw %v, want [\"cursor-moved\"] applied synchronously", m.seen)
+	}
+}
+
+// TestResolveWidgetCmdAppliesBatchInOrder covers the shape
+// TextArea.HandleEvent actually returns when both OnChange and
+// OnCursorChange fire for the same edit (tui.Batch of two Cmds) — each
+// sub-Cmd's Msg must reach Update, in order, all before
+// resolveWidgetCmd returns.
+func TestResolveWidgetCmdAppliesBatchInOrder(t *testing.T) {
+	m := &focusTestModel{}
+	a := NewApp(m, 10, 3)
+	m.seen = nil
+
+	batch := Batch(
+		func() Msg { return "changed:a" },
+		func() Msg { return "cursor:1" },
+	)
+	a.resolveWidgetCmd(batch)
+
+	want := []Msg{"changed:a", "cursor:1"}
+	if len(m.seen) != len(want) || m.seen[0] != want[0] || m.seen[1] != want[1] {
+		t.Fatalf("Model.Update saw %v, want %v in order", m.seen, want)
+	}
+}
+
+// TestResolveWidgetCmdLeavesSpecialMsgsUnresolved documents the one
+// deliberate exception: QuitMsg/ClipboardMsg/FocusMsg aren't fed
+// through Dispatch here (Dispatch is I/O-free by design and can't stop
+// Run or write the clipboard) — they come back as a Cmd for Run's
+// normal async path to handle exactly as before.
+func TestResolveWidgetCmdLeavesSpecialMsgsUnresolved(t *testing.T) {
+	m := &focusTestModel{}
+	a := NewApp(m, 10, 3)
+	m.seen = nil
+
+	cmd := func() Msg { return ClipboardMsg{Text: "hi"} }
+	follow := a.resolveWidgetCmd(cmd)
+
+	if len(m.seen) != 0 {
+		t.Fatalf("Model.Update saw %v, want none — ClipboardMsg must not reach Update via resolveWidgetCmd", m.seen)
+	}
+	if len(follow) != 1 {
+		t.Fatalf("follow-up cmds = %d, want 1 (the ClipboardMsg, for Run to handle)", len(follow))
+	}
+	cm, ok := follow[0]().(ClipboardMsg)
+	if !ok || cm.Text != "hi" {
+		t.Fatalf("follow-up cmd produced %#v, want ClipboardMsg{Text: \"hi\"}", follow[0]())
+	}
+}

@@ -27,7 +27,14 @@ type Widget interface {
 	// enclosing Box assigned to this Node.
 	Paint(p *cell.Painter)
 	// HandleEvent processes an input event delivered because this
-	// widget is focused, optionally returning a Cmd.
+	// widget is focused, optionally returning a Cmd. That Cmd is
+	// resolved synchronously by App.HandleInput's caller (Run), not
+	// run asynchronously the way a Cmd returned from Model.Update is —
+	// see App.resolveWidgetCmd's doc comment. It must therefore only
+	// ever repackage a Msg value already fully computed before
+	// HandleEvent returns (the pattern every built-in widget's
+	// OnChange/OnCursorChange/OnSubmit-style hook follows, being typed
+	// func(...) Msg rather than Cmd) — never wrap real blocking work.
 	HandleEvent(e input.Event) Cmd
 	// Focusable reports whether this widget participates in
 	// Tab/Shift-Tab focus traversal (see focus.go).

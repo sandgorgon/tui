@@ -161,19 +161,53 @@ func (a *App) render() {
 // application Msg. It returns every Cmd produced by any of these
 // paths, for the caller to run.
 func (a *App) HandleInput(e input.Event) []Cmd {
+	dispatchCmd, widgetCmd, widgetFirst := a.handleInput(e)
+	var cmds []Cmd
+	if widgetFirst {
+		if widgetCmd != nil {
+			cmds = append(cmds, widgetCmd)
+		}
+		if dispatchCmd != nil {
+			cmds = append(cmds, dispatchCmd)
+		}
+	} else {
+		if dispatchCmd != nil {
+			cmds = append(cmds, dispatchCmd)
+		}
+		if widgetCmd != nil {
+			cmds = append(cmds, widgetCmd)
+		}
+	}
+	return cmds
+}
+
+// handleInput is HandleInput's implementation, splitting its result
+// into dispatchCmd (from Dispatch(Msg(e)), i.e. Update's own reaction
+// to the raw event — may legitimately be real asynchronous work, per
+// Cmd's documented contract) and widgetCmd (from the focused widget's
+// HandleEvent, or an active FocusScope's HandleOutsideClick) instead
+// of a single combined slice. widgetFirst reports which came first, so
+// HandleInput can reassemble the exact same order it always has.
+//
+// Run() calls this directly (not HandleInput) so it can resolve
+// widgetCmd synchronously via resolveWidgetCmd instead of routing it
+// through the async goroutine+channel Cmd machinery — see
+// resolveWidgetCmd's doc comment for why that split exists (#18).
+// HandleInput itself is unaffected: it still returns widgetCmd
+// unresolved, exactly as before.
+func (a *App) handleInput(e input.Event) (dispatchCmd Cmd, widgetCmd Cmd, widgetFirst bool) {
 	if ke, ok := e.(input.KeyEvent); ok {
 		claims, releaseKey := a.rawKeyClaim()
 		switch {
 		case claims && ke == releaseKey:
 			a.moveFocus(true)
-			return nil
+			return nil, nil, false
 		case !claims && ke.Key == input.KeyTab:
 			a.moveFocus(ke.Mod&input.ModShift == 0)
-			return nil
+			return nil, nil, false
 		}
 	}
 
-	var cmds []Cmd
 	widgetEvent := e
 	deliverToFocused := true
 	if me, ok := e.(input.MouseEvent); ok {
@@ -188,22 +222,17 @@ func (a *App) HandleInput(e input.Event) []Cmd {
 				if r, ok := ob.OverlayBounds(); ok && !rectContains(r, me.X, me.Y) {
 					deliverToFocused = false
 					if oc, ok := scope.(OutsideClicker); ok {
-						if cmd := oc.HandleOutsideClick(me); cmd != nil {
-							cmds = append(cmds, cmd)
-						}
+						widgetCmd = oc.HandleOutsideClick(me)
+						widgetFirst = true
 					}
 				}
 			}
 		}
 	}
 
-	if cmd := a.Dispatch(Msg(e)); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
+	dispatchCmd = a.Dispatch(Msg(e))
 	if deliverToFocused && len(a.focusables) > 0 {
-		if cmd := a.focusables[a.focusIdx].HandleEvent(widgetEvent); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		widgetCmd = a.focusables[a.focusIdx].HandleEvent(widgetEvent)
 		// HandleEvent can mutate the widget's own retained state
 		// directly (e.g. widget.Viewport's scroll offset) rather than
 		// only ever going through a Msg/Update round trip the way
@@ -215,7 +244,64 @@ func (a *App) HandleInput(e input.Event) []Cmd {
 		// cells that actually differ from the terminal's last frame.
 		a.render()
 	}
-	return cmds
+	return dispatchCmd, widgetCmd, widgetFirst
+}
+
+// resolveWidgetCmd runs c — and, recursively, every sub-Cmd of a
+// BatchMsg it produces — synchronously, applying each resulting Msg to
+// Update via Dispatch immediately instead of deferring it through
+// Run's async goroutine+channel Cmd machinery.
+//
+// This is safe specifically for widget-sourced Cmds (the focused
+// widget's HandleEvent, an OutsideClicker's HandleOutsideClick)
+// because every built-in widget's callback-style hook — OnChange,
+// OnCursorChange, OnSubmit, OnSelect, and so on — is typed
+// func(...) Msg, not Cmd: the widget can only ever repackage a Msg
+// value it already computed before HandleEvent returned, so calling it
+// here does no blocking work. It is NOT safe for Dispatch's own Cmd
+// (Update's reaction to the raw event), which is why that one stays on
+// the normal async path in Run() — Cmd's documented contract is
+// asynchronous work, and an app is free to kick off real I/O directly
+// from a keypress.
+//
+// Resolving widget Cmds synchronously — rather than handing them to
+// runCmd, which sends the result back through a channel a later,
+// possibly-reordered select iteration applies — closes a real ordering
+// race (#18): a widget's Msg could still be in flight when the *next*
+// input event's own synchronous Dispatch call already ran, corrupting
+// any caller-side state kept in sync with the widget's live value
+// (e.g. restoring cursor position across a tab/pane switch driven by
+// TextArea.OnCursorChange).
+//
+// QuitMsg/ClipboardMsg/FocusMsg are deliberately left unresolved (an
+// Immediate-shaped Cmd for the caller to run as before): they're
+// one-shot side-effecting commands, not state #18's race can corrupt,
+// and actually applying them (writing the clipboard, stopping Run)
+// needs machinery Dispatch's I/O-free contract doesn't have.
+func (a *App) resolveWidgetCmd(c Cmd) []Cmd {
+	if c == nil {
+		return nil
+	}
+	msg := c()
+	if msg == nil {
+		return nil
+	}
+	if batch, ok := msg.(BatchMsg); ok {
+		var out []Cmd
+		for _, sub := range batch {
+			out = append(out, a.resolveWidgetCmd(sub)...)
+		}
+		return out
+	}
+	switch msg.(type) {
+	case QuitMsg, ClipboardMsg, FocusMsg:
+		return []Cmd{func() Msg { return msg }}
+	default:
+		if follow := a.Dispatch(msg); follow != nil {
+			return []Cmd{follow}
+		}
+		return nil
+	}
 }
 
 // rectContains reports whether (x,y) falls within r.
@@ -392,9 +478,14 @@ func (a *App) Run() error {
 	for {
 		select {
 		case ev := <-events:
-			cmds := a.HandleInput(ev)
+			dispatchCmd, widgetCmd, _ := a.handleInput(ev)
+			// widgetCmd is resolved synchronously, before redraw(),
+			// rather than run through runCmd like dispatchCmd — see
+			// resolveWidgetCmd's doc comment (#18).
+			followups := a.resolveWidgetCmd(widgetCmd)
 			redraw()
-			for _, c := range cmds {
+			runCmd(dispatchCmd)
+			for _, c := range followups {
 				runCmd(c)
 			}
 

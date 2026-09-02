@@ -248,6 +248,40 @@ func (b *editBuffer) deleteForward() bool {
 	return true
 }
 
+// deleteWordBackward deletes the active selection if there is one (see
+// deleteSelection), otherwise from the cursor back to the previous
+// word boundary (see wordBoundary) — Ctrl+Backspace's conventional
+// meaning in most editors.
+func (b *editBuffer) deleteWordBackward() bool {
+	if b.deleteSelection() {
+		return true
+	}
+	if b.cursor == 0 {
+		return false
+	}
+	b.pushUndo()
+	start := wordBoundary(b.buf, b.cursor, -1)
+	b.buf = append(b.buf[:start], b.buf[b.cursor:]...)
+	b.cursor = start
+	return true
+}
+
+// deleteWordForward deletes the active selection if there is one (see
+// deleteSelection), otherwise from the cursor forward to the next word
+// boundary (see wordBoundary) — Ctrl+Delete's conventional meaning.
+func (b *editBuffer) deleteWordForward() bool {
+	if b.deleteSelection() {
+		return true
+	}
+	if b.cursor >= len(b.buf) {
+		return false
+	}
+	b.pushUndo()
+	end := wordBoundary(b.buf, b.cursor, 1)
+	b.buf = append(b.buf[:b.cursor], b.buf[end:]...)
+	return true
+}
+
 func insertRune(buf []rune, at int, r rune) []rune {
 	tail := make([]rune, len(buf)-at)
 	copy(tail, buf[at:])

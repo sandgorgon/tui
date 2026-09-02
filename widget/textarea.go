@@ -485,15 +485,17 @@ func (w *textAreaWidget) handleKey(ke input.KeyEvent) bool {
 		w.moveTo(0, shift)
 	case ctrl && ke.Key == input.KeyEnd:
 		w.moveTo(len(w.buf), shift)
-	case ctrl && (ke.Key == input.KeyUp || ke.Key == input.KeyDown):
-		// Deliberately a no-op, not a fallthrough to plain Up/Down:
-		// this library assigns no meaning to Ctrl+Up/Down, unlike
-		// Ctrl+Left/Right/Home/End's word/buffer jumps above, so this
-		// key combo is genuinely left unclaimed rather than silently
-		// treated as a plain vertical move. A host app is free to bind
-		// Ctrl+Up/Down to its own behavior (e.g. switching which
-		// TextArea is focused) without TextArea also reacting to the
-		// same keystroke underneath it.
+	case ctrl && (ke.Key == input.KeyUp || ke.Key == input.KeyDown || ke.Key == input.KeyPgUp || ke.Key == input.KeyPgDown):
+		// Deliberately a no-op, not a fallthrough to plain vertical/
+		// page movement: this library assigns no meaning to Ctrl+Up/
+		// Down/PgUp/PgDown, unlike Ctrl+Left/Right/Home/End's word/
+		// buffer jumps above, so these combos are genuinely left
+		// unclaimed rather than silently treated as a plain move. A
+		// host app is free to bind them to its own behavior (e.g.
+		// switching which TextArea is focused, or tab-switching —
+		// Ctrl+PgUp/PgDown's conventional meaning in browsers/editors)
+		// without TextArea also reacting to the same keystroke
+		// underneath it.
 
 	case ke.Key == input.KeyLeft:
 		w.moveHorizontal(-1, shift)
@@ -514,6 +516,10 @@ func (w *textAreaWidget) handleKey(ke input.KeyEvent) bool {
 	case ke.Key == input.KeyPgDown:
 		w.movePage(1, shift)
 
+	case ctrl && ke.Key == input.KeyBackspace:
+		return w.deleteWordBackward()
+	case ctrl && ke.Key == input.KeyDelete:
+		return w.deleteWordForward()
 	case ke.Key == input.KeyBackspace:
 		return w.backspace()
 	case ke.Key == input.KeyDelete:

@@ -475,6 +475,113 @@ func TestTextAreaInitialCursorClampsPastEnd(t *testing.T) {
 	}
 }
 
+func TestTextAreaOnCursorChangeFiresOnNavigationWithoutOnChange(t *testing.T) {
+	var offsets []int
+	m := &widgetHostModel{node: TextArea(TextAreaOptions{
+		Theme: style.DefaultDark(),
+		Value: "abc",
+		OnChange: func(v string) tui.Msg {
+			t.Fatalf("OnChange fired for pure cursor navigation, value = %q", v)
+			return nil
+		},
+		OnCursorChange: func(offset int) tui.Msg {
+			offsets = append(offsets, offset)
+			return nil
+		},
+	})}
+	app := tui.NewApp(m, 14, 6)
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyLeft})
+	app.HandleInput(input.KeyEvent{Key: input.KeyLeft})
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome}) // -> offset 0
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome}) // already at line start: no-op, no callback
+
+	if want := []int{2, 1, 0}; !equalInts(offsets, want) {
+		t.Fatalf("offsets = %v, want %v", offsets, want)
+	}
+}
+
+func TestTextAreaOnCursorChangeFiresOnEditAlongsideOnChange(t *testing.T) {
+	var value string
+	var offset int
+	m := &widgetHostModel{node: TextArea(TextAreaOptions{
+		Theme: style.DefaultDark(),
+		OnChange: func(v string) tui.Msg {
+			value = v
+			return nil
+		},
+		OnCursorChange: func(o int) tui.Msg {
+			offset = o
+			return nil
+		},
+	})}
+	app := tui.NewApp(m, 14, 6)
+
+	app.HandleInput(input.KeyEvent{Rune: 'a'})
+	app.HandleInput(input.KeyEvent{Rune: 'b'})
+
+	if value != "ab" {
+		t.Fatalf("value = %q, want %q", value, "ab")
+	}
+	if offset != 2 {
+		t.Fatalf("offset = %d, want %d", offset, 2)
+	}
+}
+
+func TestTextAreaOnCursorChangeFiresOnMouseClick(t *testing.T) {
+	var offset = -1
+	m := &widgetHostModel{node: TextArea(TextAreaOptions{
+		Theme: style.DefaultDark(),
+		Value: "abc\ndef",
+		OnCursorChange: func(o int) tui.Msg {
+			offset = o
+			return nil
+		},
+	})}
+	app := tui.NewApp(m, 14, 6)
+
+	app.HandleInput(input.MouseEvent{X: 2, Y: 2, Button: input.MouseLeft}) // second line ("def"), col 1 -> offset 5
+
+	if offset != 5 {
+		t.Fatalf("offset = %d, want %d", offset, 5)
+	}
+}
+
+func TestTextAreaOnCursorChangeBatchesWithOnChangeCmd(t *testing.T) {
+	m := &widgetHostModel{node: TextArea(TextAreaOptions{
+		Theme:          style.DefaultDark(),
+		OnChange:       func(v string) tui.Msg { return "changed:" + v },
+		OnCursorChange: func(o int) tui.Msg { return "cursor" },
+	})}
+	app := tui.NewApp(m, 14, 6)
+
+	cmds := app.HandleInput(input.KeyEvent{Rune: 'a'})
+	if len(cmds) != 1 {
+		t.Fatalf("cmds = %v, want a single (batched) Cmd", cmds)
+	}
+	batch, ok := cmds[0]().(tui.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("cmds[0]() = %#v, want a 2-element tui.BatchMsg", cmds[0]())
+	}
+	got := []tui.Msg{batch[0](), batch[1]()}
+	want := []tui.Msg{"changed:a", "cursor"}
+	if got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("batch msgs = %v, want %v", got, want)
+	}
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestTextAreaGutterShowsLineNumbersAndShiftsContent(t *testing.T) {
 	node := TextArea(TextAreaOptions{
 		Theme: style.DefaultDark(),

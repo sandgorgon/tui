@@ -66,6 +66,15 @@ type TextAreaOptions struct {
 	// OnChange, if non-nil, is called with the field's current content
 	// after every edit.
 	OnChange func(value string) tui.Msg
+	// OnCursorChange, if non-nil, is called with the cursor's current
+	// rune offset — the same unit InitialCursor takes — whenever it
+	// moves: a navigation key, a mouse click/drag, or an edit that also
+	// relocates it. Unlike OnChange, this fires on pure cursor movement
+	// too (arrow keys, Home/End, a click) since that isn't a content
+	// edit. Lets a caller track the position across a remount (e.g.
+	// restoring it via InitialCursor after the field is later
+	// recreated) or drive a live "line N, col M" indicator.
+	OnCursorChange func(offset int) tui.Msg
 	// OnSubmit, if non-nil, is called with the field's content when
 	// Ctrl+Enter is pressed (plain Enter inserts a newline, unlike
 	// TextInput's Enter).
@@ -436,6 +445,7 @@ func (w *textAreaWidget) HandleEvent(e input.Event) tui.Cmd {
 		return func() tui.Msg { return msg }
 	}
 
+	prevCursor := w.cursor
 	changed := false
 	switch ev := e.(type) {
 	case input.KeyEvent:
@@ -444,20 +454,23 @@ func (w *textAreaWidget) HandleEvent(e input.Event) tui.Cmd {
 		w.insertString(ev.Text) // newlines allowed, unlike TextInput's paste
 		changed = true
 	case input.MouseEvent:
-		w.handleMouse(ev)
-		return nil // cursor/selection changes aren't content edits, no OnChange
+		w.handleMouse(ev) // cursor/selection changes aren't content edits, no OnChange
 	default:
 		return nil
 	}
 
-	if !changed || w.opts.OnChange == nil {
-		return nil
+	var cmds []tui.Cmd
+	if changed && w.opts.OnChange != nil {
+		if msg := w.opts.OnChange(string(w.buf)); msg != nil {
+			cmds = append(cmds, func() tui.Msg { return msg })
+		}
 	}
-	msg := w.opts.OnChange(string(w.buf))
-	if msg == nil {
-		return nil
+	if w.cursor != prevCursor && w.opts.OnCursorChange != nil {
+		if msg := w.opts.OnCursorChange(w.cursor); msg != nil {
+			cmds = append(cmds, func() tui.Msg { return msg })
+		}
 	}
-	return func() tui.Msg { return msg }
+	return tui.Batch(cmds...)
 }
 
 func (w *textAreaWidget) handleKey(ke input.KeyEvent) bool {

@@ -127,6 +127,18 @@ goroutine, fed back through a channel into the single event-loop goroutine)
 — the same proven pattern as Elm/bubbletea, chosen specifically because it
 keeps all user-facing state mutation single-threaded and lock-free.
 
+One deliberate exception: a `Cmd` returned by a widget's own `HandleEvent`
+(as opposed to one `Update` returns) is resolved *synchronously*, applied to
+`Update` before `Run`'s loop reads the next input event, not routed through
+that goroutine+channel hop. Every built-in widget's callback-style hook
+(`OnChange`, `OnCursorChange`, `OnSubmit`, ...) is typed `func(...) Msg`, so
+the widget can only ever repackage a value already known before `HandleEvent`
+returns — there's no real async work to lose by resolving it inline, and
+doing so closes an ordering race (#18) the goroutine hop otherwise allows: a
+widget's `Msg` could still be in flight when a *later* input event's own
+synchronous `Update` call already ran, corrupting any caller-side state kept
+in sync with the widget's live value. See `App.resolveWidgetCmd`.
+
 ### 3.2 Rendering: cost-based diffing, not just minimal diffing
 
 The renderer keeps two `cell.Buffer`s (front/back). Each row gets a rolling

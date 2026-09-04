@@ -11,7 +11,7 @@ import (
 // to know where things ended up rather than to draw them. Used by App
 // to hit-test a MouseEvent's (X,Y) against (see App.hitTest).
 //
-// Like collectPlainFocusables, this only sees the "plain" tree: a
+// Like collectPlainFocusablesAndKeys, this only sees the "plain" tree: a
 // widget that hosts its own nested content privately (Viewport, or an
 // active Modal/CommandPalette's FocusScope-provided widgets) is opaque
 // here too, occupying whatever Rect its own Node was assigned and

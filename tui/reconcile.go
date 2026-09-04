@@ -267,28 +267,43 @@ func (r *retained) paint(p *cell.Painter) {
 // doc comment) — the first such active scope found in document order
 // wins, and everything outside it is ignored.
 func collectFocusables(r *retained) []Widget {
-	if scope := findActiveFocusScope(r); scope != nil {
-		return scope.Focusables()
-	}
-	return collectPlainFocusables(r)
+	widgets, _ := collectFocusablesAndKeys(r)
+	return widgets
 }
 
-// collectPlainFocusables is collectFocusables' unscoped case: every
-// kindWidget node whose Widget reports itself Focusable, found by
-// walking r in document order.
-func collectPlainFocusables(r *retained) []Widget {
+// collectFocusablesAndKeys is collectFocusables' key-preserving form:
+// keys[i] is the Node.Key that produced widgets[i] (nil for a
+// positionally-matched, unkeyed slot), used by App.render() to report
+// the focused widget's key via FocusAware (see focusscope.go). While
+// an active FocusScope is in effect, keys is nil throughout —
+// FocusScope.Focusables() doesn't preserve key information, since a
+// scope's body (e.g. Modal/CommandPalette) lives in its own private
+// tui.Tree and isn't key-addressable from here.
+func collectFocusablesAndKeys(r *retained) (widgets []Widget, keys []any) {
+	if scope := findActiveFocusScope(r); scope != nil {
+		return scope.Focusables(), nil
+	}
+	return collectPlainFocusablesAndKeys(r)
+}
+
+// collectPlainFocusablesAndKeys is collectFocusablesAndKeys' unscoped
+// case: every kindWidget node whose Widget reports itself Focusable,
+// found by walking r in document order, alongside the Node.Key that
+// produced it.
+func collectPlainFocusablesAndKeys(r *retained) (widgets []Widget, keys []any) {
 	if r == nil {
-		return nil
+		return nil, nil
 	}
 	if r.kind == kindWidget {
 		if r.widget.Focusable() {
-			return []Widget{r.widget}
+			return []Widget{r.widget}, []any{r.key}
 		}
-		return nil
+		return nil, nil
 	}
-	var out []Widget
 	for _, c := range r.children {
-		out = append(out, collectPlainFocusables(c)...)
+		w, k := collectPlainFocusablesAndKeys(c)
+		widgets = append(widgets, w...)
+		keys = append(keys, k...)
 	}
-	return out
+	return widgets, keys
 }

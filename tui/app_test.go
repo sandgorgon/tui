@@ -181,6 +181,80 @@ func TestAppTabWithNoFocusablesIsNoop(t *testing.T) {
 	}
 }
 
+// focusAwareTestModel implements FocusAware alongside the same
+// two-Focusable ("left"/"right") shape as focusTestModel, recording
+// every SetFocusedKey call so tests can assert on the sequence.
+type focusAwareTestModel struct {
+	lastKey    any
+	keyHistory []any
+}
+
+func (m *focusAwareTestModel) Init() Cmd                   { return nil }
+func (m *focusAwareTestModel) Update(msg Msg) (Model, Cmd) { return m, nil }
+func (m *focusAwareTestModel) SetFocusedKey(key any) {
+	m.lastKey = key
+	m.keyHistory = append(m.keyHistory, key)
+}
+func (m *focusAwareTestModel) View() Node {
+	return Box(layout.Horizontal,
+		Child(layout.Fill(1), Focusable("left", Text("L", cell.Style{}), func(e input.Event) Msg { return nil })),
+		Child(layout.Fill(1), Focusable("right", Text("R", cell.Style{}), func(e input.Event) Msg { return nil })),
+	)
+}
+
+func TestAppReportsFocusedKeyToFocusAwareModel(t *testing.T) {
+	m := &focusAwareTestModel{}
+	a := NewApp(m, 10, 3)
+
+	// No previous frame exists yet at construction, so the very first
+	// call must report nil rather than guessing at focusIdx 0's key.
+	if len(m.keyHistory) == 0 || m.keyHistory[0] != nil {
+		t.Fatalf("first SetFocusedKey call(s) = %v, want first == nil", m.keyHistory)
+	}
+
+	a.HandleInput(input.KeyEvent{Key: input.KeyTab})
+	if got := m.lastKey; got != "right" {
+		t.Errorf("SetFocusedKey after Tab = %v, want %q", got, "right")
+	}
+
+	a.HandleInput(input.KeyEvent{Key: input.KeyTab, Mod: input.ModShift})
+	if got := m.lastKey; got != "left" {
+		t.Errorf("SetFocusedKey after Shift+Tab = %v, want %q", got, "left")
+	}
+
+	if ok := a.SetFocus(1); !ok {
+		t.Fatal("SetFocus(1) failed")
+	}
+	if got := m.lastKey; got != "right" {
+		t.Errorf("SetFocusedKey after SetFocus(1) = %v, want %q", got, "right")
+	}
+}
+
+// focusAwareUnkeyedModel is FocusAware over a single Focusable that
+// carries no explicit Node.Key (positional matching only), to confirm
+// an unkeyed widget reports key == nil rather than some placeholder.
+type focusAwareUnkeyedModel struct{ lastKey any }
+
+func (m *focusAwareUnkeyedModel) Init() Cmd                   { return nil }
+func (m *focusAwareUnkeyedModel) Update(msg Msg) (Model, Cmd) { return m, nil }
+func (m *focusAwareUnkeyedModel) SetFocusedKey(key any)       { m.lastKey = key }
+func (m *focusAwareUnkeyedModel) View() Node {
+	return Focusable(nil, Text("X", cell.Style{}), func(e input.Event) Msg { return nil })
+}
+
+func TestAppReportsNilKeyForUnkeyedFocusable(t *testing.T) {
+	m := &focusAwareUnkeyedModel{}
+	a := NewApp(m, 10, 1)
+
+	// One more render (a no-op Tab, single focusable so it's a no-op
+	// cycle back to itself) to get past the always-nil first frame and
+	// confirm a real, unkeyed focused widget still reports nil.
+	a.HandleInput(input.KeyEvent{Key: input.KeyTab})
+	if m.lastKey != nil {
+		t.Errorf("SetFocusedKey for an unkeyed Focusable = %v, want nil", m.lastKey)
+	}
+}
+
 func TestAppInitCmdConsumedOnce(t *testing.T) {
 	a := NewApp(&counterModel{}, 10, 1)
 	if a.InitCmd() != nil {

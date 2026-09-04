@@ -139,6 +139,22 @@ widget's `Msg` could still be in flight when a *later* input event's own
 synchronous `Update` call already ran, corrupting any caller-side state kept
 in sync with the widget's live value. See `App.resolveWidgetCmd`.
 
+Focus itself lives entirely in `App` (`focusIdx`/`moveFocus`/`SetFocus`), not
+`Model` — every focus change (Tab/Shift-Tab, click-to-focus, `SetFocus`)
+mutates it directly and never round-trips through `Update`. A `Model` that
+needs to *react visually* to "is focus currently anywhere in this group of
+widgets" (#24 — a pane multiplexer highlighting a pane's title bar while
+focus sits on any of that pane's own widgets, not just the title bar
+itself) can optionally implement `FocusAware` (`SetFocusedKey(key any)`),
+which `App.render()` calls right before `View()` with whichever Focusable's
+`Node.Key` last held focus (`nil` if unkeyed, nothing focused, or an active
+`FocusScope` is in effect — a `Modal`/`CommandPalette` body isn't
+key-addressable this way). The key necessarily reflects the *previous*
+frame's focus order, since the new tree doesn't exist until `View()`
+returns — invisible on screen in practice, since `Run()` only flushes to
+the terminal once per input event, by which point at least one further
+`render()` has already caught up.
+
 ### 3.2 Rendering: cost-based diffing, not just minimal diffing
 
 The renderer keeps two `cell.Buffer`s (front/back). Each row gets a rolling

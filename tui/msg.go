@@ -28,6 +28,34 @@ type Model interface {
 	View() Node
 }
 
+// FocusAware is an optional interface a Model can implement to learn
+// which focusable widget currently holds keyboard focus, identified
+// by the Node.Key its Node was given (nil for an unkeyed widget, or
+// if nothing is focused, or if focus is currently inside an active
+// FocusScope — a Modal/CommandPalette's own scoped body isn't key-
+// addressable this way; see collectFocusablesAndKeys). App.render()
+// calls SetFocusedKey immediately before View(), so a Model can
+// consult it while building the frame.
+//
+// The key reported is one render call behind the tree View() is about
+// to produce — focus order for the *new* tree isn't known until after
+// View() runs — but this lag is never visible on screen: Run() only
+// flushes to the terminal once per input event, by which point at
+// least one further render() has already caught up (see
+// App.handleInput, which re-renders after forwarding an event to the
+// focused widget).
+//
+// This exists so a Model can make presentation decisions that depend
+// on "is focus currently anywhere within this logical group of
+// widgets" — e.g. a pane multiplexer highlighting a pane's title bar
+// while focus is on any of that pane's own focusables, not just the
+// title bar itself — without tui needing a first-class grouping
+// primitive: the Model compares the reported key against its own
+// key-naming convention.
+type FocusAware interface {
+	SetFocusedKey(key any)
+}
+
 // QuitMsg, produced by Quit, tells the App to stop its Run loop.
 type QuitMsg struct{}
 

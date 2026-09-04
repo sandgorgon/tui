@@ -31,6 +31,7 @@ type App struct {
 	buf  *cell.Buffer
 
 	focusables []Widget
+	focusKeys  []any // parallel to focusables; see collectFocusablesAndKeys and FocusAware
 	focusIdx   int
 	rects      map[Widget]cell.Rect // absolute on-screen bounds of each focusable, see hittest.go
 
@@ -96,8 +97,20 @@ func (a *App) Resize(width, height int) {
 // focus on the same slot if it still exists (clamping otherwise), and
 // repaints — the one place all three stay in sync.
 func (a *App) render() {
+	if fa, ok := a.model.(FocusAware); ok {
+		// Necessarily reports the *previous* frame's focus state — the
+		// new tree (and its focus order) doesn't exist until View()
+		// below returns. See FocusAware's doc comment for why that lag
+		// is never visible on screen.
+		var key any
+		if a.focusIdx >= 0 && a.focusIdx < len(a.focusKeys) {
+			key = a.focusKeys[a.focusIdx]
+		}
+		fa.SetFocusedKey(key)
+	}
+
 	a.root = reconcile(a.root, a.model.View())
-	a.focusables = collectFocusables(a.root)
+	a.focusables, a.focusKeys = collectFocusablesAndKeys(a.root)
 
 	a.rects = make(map[Widget]cell.Rect, len(a.focusables))
 	collectRects(a.root, cell.Rect{W: a.buf.Width, H: a.buf.Height}, a.rects)

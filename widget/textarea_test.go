@@ -781,6 +781,39 @@ func TestTextAreaGutterShownWhenBufferEmpty(t *testing.T) {
 	}
 }
 
+func TestTextAreaGutterPaddingAndSeparatorUseRowsOwnStyle(t *testing.T) {
+	panelBg := cell.RGBColor(30, 30, 40)
+	panelStyle := cell.Style{Bg: panelBg}
+	node := TextArea(TextAreaOptions{
+		Theme: style.DefaultDark(),
+		Value: "a\nb",
+		Gutter: func(lineIdx int) (string, cell.Style) {
+			if lineIdx == 0 {
+				return "1", panelStyle
+			}
+			return "22", panelStyle
+		},
+	})
+	buf := cell.NewBuffer(12, 6)
+	paintNode(t, node, buf)
+
+	// Same widest-row-plus-separator layout as
+	// TestTextAreaGutterRightAlignsAndPadsToWidestVisibleRow: row 1's
+	// left-pad column (x=1) and both rows' separator column (x=3) must
+	// carry the row's own returned Bg, not a hardcoded muted style —
+	// otherwise a caller painting the gutter as one colored panel gets
+	// a seam of the default background running through it (issue #22).
+	if got := buf.At(1, 1).Style.Bg; got != panelBg {
+		t.Errorf("At(1,1).Style.Bg = %v, want left-pad column to use the row's own Bg %v", got, panelBg)
+	}
+	if got := buf.At(3, 1).Style.Bg; got != panelBg {
+		t.Errorf("At(3,1).Style.Bg = %v, want separator column to use the row's own Bg %v", got, panelBg)
+	}
+	if got := buf.At(3, 2).Style.Bg; got != panelBg {
+		t.Errorf("At(3,2).Style.Bg = %v, want separator column to use the row's own Bg %v", got, panelBg)
+	}
+}
+
 func TestTextAreaNilGutterAddsNoColumn(t *testing.T) {
 	node := TextArea(TextAreaOptions{Theme: style.DefaultDark(), Value: "one"})
 	buf := cell.NewBuffer(12, 5)

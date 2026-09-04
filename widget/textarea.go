@@ -264,22 +264,24 @@ func gutterWidth(gutter func(int) (string, cell.Style), lineCount, scrollRow, in
 // paintGutterRow right-aligns gutter's string for lineIdx within
 // columns [0,gutterW) of row row — gutterW-1 columns of (space-padded)
 // text plus one trailing blank separator column, matching
-// gutterWidth's "widest string plus one" accounting. muted is the
-// style for padding and the separator column; the string itself
-// paints in whatever style gutter returns for it.
-func paintGutterRow(p *cell.Painter, gutter func(int) (string, cell.Style), lineIdx, row, gutterW int, muted cell.Style) {
+// gutterWidth's "widest string plus one" accounting. Padding and the
+// separator column paint in the row's own returned style (blank
+// glyph) so a caller painting the gutter as one colored panel via
+// its Bg doesn't get a seam of the default background running
+// through the padding/separator cells.
+func paintGutterRow(p *cell.Painter, gutter func(int) (string, cell.Style), lineIdx, row, gutterW int) {
 	text, style := gutter(lineIdx)
 	textW := gutterTextWidth(text)
 	col := 0
 	for ; col < gutterW-1-textW; col++ {
-		p.SetCell(col, row, ' ', muted)
+		p.SetCell(col, row, ' ', style)
 	}
 	for _, r := range text {
 		p.SetCell(col, row, r, style)
 		col += runeCols(r)
 	}
 	for ; col < gutterW; col++ {
-		p.SetCell(col, row, ' ', muted)
+		p.SetCell(col, row, ' ', style)
 	}
 }
 
@@ -305,7 +307,7 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 	if len(w.buf) == 0 {
 		gutterW := gutterWidth(w.opts.Gutter, 1, 0, 1)
 		if gutterW > 0 && gutterW < innerW {
-			paintGutterRow(inner, w.opts.Gutter, 0, 0, gutterW, w.opts.Theme.MutedText())
+			paintGutterRow(inner, w.opts.Gutter, 0, 0, gutterW)
 		} else {
 			gutterW = 0
 		}
@@ -349,7 +351,7 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 			break
 		}
 		if gutterW > 0 {
-			paintGutterRow(inner, w.opts.Gutter, lineIdx, row, gutterW, w.opts.Theme.MutedText())
+			paintGutterRow(inner, w.opts.Gutter, lineIdx, row, gutterW)
 		}
 		ln := lines[lineIdx]
 		// A line entirely swept by the selection (selection starts at

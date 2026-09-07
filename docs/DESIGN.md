@@ -155,6 +155,20 @@ returns — invisible on screen in practice, since `Run()` only flushes to
 the terminal once per input event, by which point at least one further
 `render()` has already caught up.
 
+A retained widget with state that changes on a background goroutine (e.g.
+`widget.Terminal`'s pty reader noticing the child process exited) has no
+`Cmd`/`Msg` channel of its own — only `Update`/`HandleEvent` can originate a
+`Cmd` — so it can't push a notification the instant that happens. Rather
+than making `HandleEvent` spend whatever real input event happens to arrive
+next purely on detecting it (#33 — the keystroke that triggered detection
+was silently discarded, never reaching whatever widget the app switched to
+in reaction), such a widget can implement `PendingMsgSource`
+(`TakePendingMsg() Msg`, consuming/clearing whatever it reports).
+`App.Dispatch` — the one funnel both a real input event's own raw
+`Dispatch(Msg(e))` call and a host's own periodic redraw `Cmd` already pass
+through — drains it after every render, so the `Msg` surfaces on whichever
+`Dispatch` call happens to run next instead of costing an input event.
+
 ### 3.2 Rendering: cost-based diffing, not just minimal diffing
 
 The renderer keeps two `cell.Buffer`s (front/back). Each row gets a rolling

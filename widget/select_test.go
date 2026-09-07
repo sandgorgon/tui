@@ -47,6 +47,46 @@ func TestSelectOpenShowsOptionListWithSelectionMarker(t *testing.T) {
 	}
 }
 
+func TestSelectFramelessSkipsBorderAndUsesFullRect(t *testing.T) {
+	node := Select([]string{"red", "green", "blue"}, 1, 1, SelectOptions{Theme: style.DefaultDark(), Open: true, Frameless: true}, nil)
+	// arrow line(1) + 3 options(3), no border rows at all.
+	buf := cell.NewBuffer(12, 4)
+	paintNode(t, node, buf)
+
+	rows := strings.Split(buf.String(), "\n")
+	for _, row := range rows {
+		if strings.ContainsAny(row, "┌┐└┘─│") {
+			t.Fatalf("rows = %v, want no border glyphs when Frameless", rows)
+		}
+	}
+	if !strings.Contains(rows[0], "▴ green") {
+		t.Errorf("row 0 = %q, want the control on row 0 (no top border)", rows[0])
+	}
+	if !strings.Contains(rows[3], "blue") {
+		t.Errorf("row 3 = %q, want \"blue\" as the last visible row (no bottom border)", rows[3])
+	}
+}
+
+func TestSelectFramelessClickTranslatesWithoutBorderOffset(t *testing.T) {
+	var got input.Event
+	node := Select([]string{"red", "green", "blue"}, 0, 0, SelectOptions{Theme: style.DefaultDark(), Open: true, Frameless: true}, func(e input.Event) tui.Msg {
+		got = e
+		return "chosen"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 12, 4) // control+3 options, no border rows
+
+	// Y=2 is the second option row ("green"): control(1)+first-option(1).
+	cmds := app.HandleInput(input.MouseEvent{X: 2, Y: 2, Button: input.MouseLeft})
+	if len(cmds) != 1 || cmds[0]() != "chosen" {
+		t.Fatalf("expected onEvent's Msg from the click, got cmds=%v", cmds)
+	}
+	me, ok := got.(input.MouseEvent)
+	if !ok || me.Y != 1 {
+		t.Errorf("onEvent received %v, want Y=1 (\"green\"'s index) with no border offset", got)
+	}
+}
+
 func TestSelectCursorAndSelectionMarkersAreIndependent(t *testing.T) {
 	// cursor on "blue" (idx 2) but selected is still "red" (idx 0).
 	node := Select([]string{"red", "green", "blue"}, 0, 2, SelectOptions{Theme: style.DefaultDark(), Open: true}, nil)

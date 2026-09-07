@@ -13,12 +13,22 @@ type SelectOptions struct {
 
 	// Open is whether the dropdown list is currently expanded.
 	Open bool
+
+	// Frameless, when true, skips drawing the border and uses the full
+	// painted rect as content area instead of insetting by one cell on
+	// each side — for a caller that already visually separates Select
+	// from its surroundings (e.g. its own Box margin) and would
+	// otherwise get a second, redundant layer of chrome. Defaults to
+	// false, preserving the bordered behavior every existing caller
+	// already gets.
+	Frameless bool
 }
 
-// Select is a focusable dropdown/combo box: closed, it shows the
-// currently selected option on one line; open (opts.Open), it expands
-// downward into a scrollable option list, reusing List's exact
-// cursor/scroll behavior. Unlike a typical GUI dropdown, it doesn't
+// Select is a focusable dropdown/combo box (optionally frameless — see
+// SelectOptions.Frameless): closed, it shows the currently selected
+// option on one line; open (opts.Open), it expands downward into a
+// scrollable option list, reusing List's exact cursor/scroll behavior.
+// Unlike a typical GUI dropdown, it doesn't
 // float an overlay on top of other content: package widget's only
 // overlay mechanism (tui.FocusScope/OverlayPainter) is built for
 // Modal/CommandPalette's full-screen-scrim case, and doesn't (yet)
@@ -64,17 +74,23 @@ func (w *selectWidget) Reconcile(props any) bool {
 
 func (w *selectWidget) Paint(p *cell.Painter) {
 	width, height := p.Size()
-	if width < 2 || height < 2 {
+	minSize := 2 // room for drawBorder's corners
+	if w.opts.Frameless {
+		minSize = 1
+	}
+	if width < minSize || height < minSize {
 		return
 	}
 
-	border := w.opts.Theme.BorderStyle()
-	if w.focused {
-		border = w.opts.Theme.FocusStyle()
+	inner := p
+	if !w.opts.Frameless {
+		border := w.opts.Theme.BorderStyle()
+		if w.focused {
+			border = w.opts.Theme.FocusStyle()
+		}
+		drawBorder(p, width, height, border)
+		inner = p.Clip(cell.Rect{X: 1, Y: 1, W: width - 2, H: height - 2})
 	}
-	drawBorder(p, width, height, border)
-
-	inner := p.Clip(cell.Rect{X: 1, Y: 1, W: width - 2, H: height - 2})
 	innerW, innerH := inner.Size()
 	if innerW <= 0 || innerH <= 0 {
 		return
@@ -122,7 +138,10 @@ func (w *selectWidget) Paint(p *cell.Painter) {
 
 func (w *selectWidget) HandleEvent(e input.Event) tui.Cmd {
 	if me, ok := e.(input.MouseEvent); ok {
-		row := me.Y - 1 // top border
+		row := me.Y
+		if !w.opts.Frameless {
+			row-- // top border
+		}
 		switch {
 		case row == 0:
 			// The closed control (or the open list's own header line):

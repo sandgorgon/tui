@@ -86,10 +86,21 @@ type TextAreaOptions struct {
 	// needs its own way out. The zero value defaults to Esc, which
 	// TextArea has no independent use for.
 	ReleaseKey input.KeyEvent
+
+	// Frameless, when true, skips drawing the border and uses the full
+	// painted rect as content area instead of insetting by one cell —
+	// for a caller that already visually separates TextArea from its
+	// surroundings (e.g. its own Box margin) and would otherwise get a
+	// second, redundant layer of chrome. Cursor rendering is unaffected
+	// since it doesn't depend on the border. Defaults to false,
+	// preserving the bordered behavior every existing caller already
+	// gets.
+	Frameless bool
 }
 
-// TextArea is a multi-line, focusable, bordered text field with
-// undo/redo, sharing TextInput's uncontrolled-after-mount design and
+// TextArea is a multi-line, focusable, bordered (optionally frameless
+// — see TextAreaOptions.Frameless) text field with undo/redo, sharing
+// TextInput's uncontrolled-after-mount design and
 // editBuffer machinery (see TextInput's doc comment) — Value is read
 // once, at mount, as the field's initial content; the application
 // learns what's in it via OnChange and OnSubmit (Ctrl+Enter). Long
@@ -287,17 +298,23 @@ func paintGutterRow(p *cell.Painter, gutter func(int) (string, cell.Style), line
 
 func (w *textAreaWidget) Paint(p *cell.Painter) {
 	width, height := p.Size()
-	if width < 2 || height < 2 {
+	minSize := 2 // room for drawBorder's corners
+	if w.opts.Frameless {
+		minSize = 1
+	}
+	if width < minSize || height < minSize {
 		return
 	}
 
-	border := w.opts.Theme.BorderStyle()
-	if w.focused {
-		border = w.opts.Theme.FocusStyle()
+	inner := p
+	if !w.opts.Frameless {
+		border := w.opts.Theme.BorderStyle()
+		if w.focused {
+			border = w.opts.Theme.FocusStyle()
+		}
+		drawBorder(p, width, height, border)
+		inner = p.Clip(cell.Rect{X: 1, Y: 1, W: width - 2, H: height - 2})
 	}
-	drawBorder(p, width, height, border)
-
-	inner := p.Clip(cell.Rect{X: 1, Y: 1, W: width - 2, H: height - 2})
 	innerW, innerH := inner.Size()
 	if innerW <= 0 || innerH <= 0 {
 		return
@@ -672,11 +689,17 @@ func (w *textAreaWidget) handleMouse(me input.MouseEvent) {
 // one stray untranslated event produces at most one wrong-but-harmless
 // cursor placement for that single frame, not a compounding error.
 func (w *textAreaWidget) setCursorFromMouse(me input.MouseEvent) {
+	x, y := me.X, me.Y
+	if !w.opts.Frameless {
+		x--
+		y-- // top/left border
+	}
+
 	lines := splitLines(w.buf)
-	lineIdx := max(0, min(w.scrollRow+(me.Y-1), len(lines)-1))
+	lineIdx := max(0, min(w.scrollRow+y, len(lines)-1))
 	ln := lines[lineIdx]
 
-	targetCol := max(0, w.scrollCol+(me.X-1))
+	targetCol := max(0, w.scrollCol+x)
 	w.cursor = columnToIndex(w.buf, ln.start, ln.end, targetCol)
 }
 

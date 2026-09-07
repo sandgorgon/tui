@@ -27,8 +27,9 @@ func centeredOverlay(p *cell.Painter, wantW, wantH int) (*cell.Painter, cell.Rec
 
 // drawBorder paints a single-line box border in style around the
 // [0,0)-[width,height) rectangle of p, shared by every widget in this
-// package that draws its own focus border (List, Viewport) instead of
-// requiring a tui.Focusable wrapper.
+// package that draws its own focus border (List, TextArea, TextInput,
+// Select) or dialog frame (Modal, CommandPalette) instead of requiring
+// a tui.Focusable wrapper.
 func drawBorder(p *cell.Painter, width, height int, style cell.Style) {
 	if width < 2 || height < 2 {
 		return

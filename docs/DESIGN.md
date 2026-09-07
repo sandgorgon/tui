@@ -785,40 +785,65 @@ rather than being a late add-on.
   row, the empty-buffer case, and a nil-`Gutter` no-op regression check);
   `go build/vet/gofmt/test` clean across the whole repo.
 
-- **`List`/`TextArea`: opt-out of the drawn box border — done.** Filed
-  as [#31](https://github.com/sandgorgon/tui/issues/31), surfaced by
-  9ed using `List`/`TextArea` as full-screen "main viewing area" panes
+- **`List`/`TextArea`/`TextInput`/`Select`: opt-out of the drawn box
+  border — done.** Filed as
+  [#31](https://github.com/sandgorgon/tui/issues/31), surfaced by 9ed
+  using `List`/`TextArea` as full-screen "main viewing area" panes
   (Nav/Edit/note/buffer-picker/directory-browse modes) rather than
   floating dialogs — each view already wraps its content in
   `tui.Box(...).Margin(1)`, so the widget's own border was a second,
   redundant layer of chrome. `Table`, by contrast, draws no border at
   all, so this wasn't a consistent widget-catalog rule to begin with.
   Added `Frameless bool` (default `false`, every existing caller
-  unaffected) to both `ListOptions` and `TextAreaOptions`: `Paint`
-  skips `drawBorder` and uses the full `width x height` rect as content
-  area instead of insetting by one cell on each side; `List.itemAt`'s
+  unaffected) to `ListOptions`/`TextAreaOptions`: `Paint` skips
+  `drawBorder` and uses the full `width x height` rect as content area
+  instead of insetting by one cell on each side; `List.itemAt`'s
   border-row offset and `TextArea.setCursorFromMouse`'s border-column/
   row offsets are skipped the same way, so mouse hit-testing keeps
-  matching what's actually painted. Implemented exactly as proposed —
-  focus legibility (List's cursor-row reverse-video highlight and
-  `"> "`/`". "` marker, TextArea's own cursor rendering) already didn't
-  depend on the border, confirmed by reading both `Paint` methods
-  before implementing rather than assumed. Deliberately not extended to
-  `TextInput`/`Select`, which share the same `drawBorder`+inset-by-1
-  shape: neither was asked for, and both have a different "is the
-  border load-bearing" answer (a single-line form field; a dropdown
-  overlay closer to Modal/CommandPalette than to a full-screen pane).
-  `widget/border.go`'s `drawBorder` doc comment was also corrected in
-  passing — it named `Viewport` as a caller, which stopped being true
-  at some earlier point (`Viewport` draws no border today); now lists
-  the widgets that actually call it. 4 new tests (2 each in
-  `widget/list_test.go`/`widget/textarea_test.go`: frameless paint has
-  no border glyphs and uses the full rect, frameless click-to-item/
-  click-to-cursor lands correctly with no border offset); confirmed
-  they fail to even compile against the pre-fix code (the `Frameless`
-  field doesn't exist yet), the strongest form of this project's
-  standing revert-and-confirm verification discipline. `go build/vet/
-  gofmt/test -race` clean across the whole repo.
+  matching what's actually painted. Focus legibility (List's cursor-row
+  reverse-video highlight and `"> "`/`". "` marker, TextArea's own
+  cursor rendering) already didn't depend on the border, confirmed by
+  reading both `Paint` methods before implementing rather than assumed.
+  **Extended to `TextInput`/`Select` too, on request, after auditing the
+  rest of the widget catalog for the same shape**: both share the
+  identical `drawBorder`+inset-by-1 `Paint` pattern and an identical
+  border-offset assumption in their own mouse handling
+  (`TextInput.setCursorFromMouse`'s `me.Y != 1`/`me.X-1`,
+  `Select.HandleEvent`'s `row := me.Y - 1`) — the issue's own redundant-
+  chrome rationale applies to a `TextInput`/`Select` embedded in the
+  same kind of margined pane exactly as much as to `List`/`TextArea`,
+  so leaving them out would have been an arbitrary inconsistency rather
+  than a principled one. Same `Frameless bool` field, same fix shape, on
+  both `TextInputOptions` and `SelectOptions`.
+  **A second, smaller bug surfaced while extending to `TextInput`**:
+  every one of these four `Paint` methods early-returns on
+  `width < 2 || height < 2`, a guard that exists only to keep
+  `drawBorder`'s corner arithmetic in bounds — but it fired
+  unconditionally, including on the new frameless path, which never
+  calls `drawBorder` at all. A frameless `TextInput`'s whole point is
+  fitting its natural 1-row content without the border's overhead, so
+  `height == 1` — impossible to render anything useful into when
+  bordered — needs to actually paint when `Frameless` is set. Fixed by
+  making the minimum `1` instead of `2` on the frameless path in all
+  four `Paint` methods (`widget/list.go`, `widget/textarea.go`,
+  `widget/textinput.go`, `widget/select.go`); the bordered path's
+  minimum is untouched. `widget/border.go`'s `drawBorder` doc comment
+  was also corrected in passing — it named `Viewport` as a caller, which
+  stopped being true at some earlier point (`Viewport` draws no border
+  today); now lists the four widgets that actually call it (plus
+  `Modal`/`CommandPalette`'s dialog frame, which has no `Frameless`
+  option — its border is load-bearing overlay/scrim separation, not
+  redundant chrome). 10 new tests across
+  `widget/list_test.go`/`widget/textarea_test.go`/
+  `widget/textinput_test.go`/`widget/select_test.go`: frameless paint
+  has no border glyphs and uses the full rect (plus a dedicated
+  `TextInput` case at `height == 1`, the exact size the guard fix
+  enables), frameless click-to-item/click-to-cursor/click-to-index
+  lands correctly with no border offset. Confirmed every test fails to
+  even compile against the pre-fix code (the `Frameless` field doesn't
+  exist yet) — the strongest form of this project's standing revert-
+  and-confirm verification discipline. `go build/vet/gofmt/test -race`
+  clean across the whole repo.
 
 ---
 

@@ -25,9 +25,20 @@ type TextInputOptions struct {
 	// OnSubmit, if non-nil, is called with the field's content when
 	// Enter is pressed.
 	OnSubmit func(value string) tui.Msg
+
+	// Frameless, when true, skips drawing the border and uses the full
+	// painted width as content area instead of insetting by one cell on
+	// each side — for a caller that already visually separates
+	// TextInput from its surroundings (e.g. its own Box margin) and
+	// would otherwise get a second, redundant layer of chrome. Cursor
+	// rendering is unaffected since it doesn't depend on the border.
+	// Defaults to false, preserving the bordered behavior every
+	// existing caller already gets.
+	Frameless bool
 }
 
-// TextInput is a single-line, focusable, bordered text field with
+// TextInput is a single-line, focusable, bordered (optionally
+// frameless — see TextInputOptions.Frameless) text field with
 // undo/redo. Its edit buffer, cursor position, and undo history (see
 // editBuffer) are the canonical example docs/DESIGN.md §3.1 gives for
 // state that belongs in a retained widget, not the application's
@@ -67,17 +78,23 @@ func (w *textInputWidget) Reconcile(props any) bool {
 
 func (w *textInputWidget) Paint(p *cell.Painter) {
 	width, height := p.Size()
-	if width < 2 || height < 2 {
+	minSize := 2 // room for drawBorder's corners
+	if w.opts.Frameless {
+		minSize = 1
+	}
+	if width < minSize || height < minSize {
 		return
 	}
 
-	border := w.opts.Theme.BorderStyle()
-	if w.focused {
-		border = w.opts.Theme.FocusStyle()
+	inner := p.Clip(cell.Rect{X: 0, Y: 0, W: width, H: 1})
+	if !w.opts.Frameless {
+		border := w.opts.Theme.BorderStyle()
+		if w.focused {
+			border = w.opts.Theme.FocusStyle()
+		}
+		drawBorder(p, width, height, border)
+		inner = p.Clip(cell.Rect{X: 1, Y: 1, W: width - 2, H: 1})
 	}
-	drawBorder(p, width, height, border)
-
-	inner := p.Clip(cell.Rect{X: 1, Y: 1, W: width - 2, H: 1})
 	innerW, _ := inner.Size()
 	if innerW <= 0 {
 		return
@@ -219,12 +236,16 @@ func (w *textInputWidget) handleMouse(me input.MouseEvent) {
 
 // setCursorFromMouse moves the cursor to the buffer offset under
 // me's local (X,Y), doing nothing if Y isn't the single content row
-// (local row 1 — row 0 is the border).
+// (local row 1 — row 0 is the border — or row 0 itself if Frameless).
 func (w *textInputWidget) setCursorFromMouse(me input.MouseEvent) {
-	if me.Y != 1 {
+	contentRow, x := 1, me.X-1
+	if w.opts.Frameless {
+		contentRow, x = 0, me.X
+	}
+	if me.Y != contentRow {
 		return
 	}
-	w.cursor = clampCursor(w.scrollOffset+(me.X-1), len(w.buf))
+	w.cursor = clampCursor(w.scrollOffset+x, len(w.buf))
 }
 
 func (w *textInputWidget) Focusable() bool         { return true }

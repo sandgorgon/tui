@@ -298,7 +298,11 @@ func paintGutterRow(p *cell.Painter, gutter func(int) (string, cell.Style), line
 
 func (w *textAreaWidget) Paint(p *cell.Painter) {
 	width, height := p.Size()
-	if width < 2 || height < 2 {
+	minSize := 2 // room for drawBorder's corners
+	if w.opts.Frameless {
+		minSize = 1
+	}
+	if width < minSize || height < minSize {
 		return
 	}
 

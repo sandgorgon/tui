@@ -81,7 +81,11 @@ func (w *listWidget) Reconcile(props any) bool {
 
 func (w *listWidget) Paint(p *cell.Painter) {
 	width, height := p.Size()
-	if width < 2 || height < 2 {
+	minSize := 2 // room for drawBorder's corners
+	if w.opts.Frameless {
+		minSize = 1
+	}
+	if width < minSize || height < minSize {
 		return
 	}
 

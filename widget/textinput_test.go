@@ -254,6 +254,57 @@ func TestTextInputClickSetsCursorPosition(t *testing.T) {
 	}
 }
 
+func TestTextInputFramelessSkipsBorderAndUsesFullWidth(t *testing.T) {
+	node := TextInput(TextInputOptions{Theme: style.DefaultDark(), Value: "hi", Frameless: true})
+	buf := cell.NewBuffer(6, 1)
+	paintNode(t, node, buf)
+
+	rows := strings.Split(buf.String(), "\n")
+	if strings.ContainsAny(rows[0], "┌┐└┘─│") {
+		t.Fatalf("row 0 = %q, want no border glyphs when Frameless", rows[0])
+	}
+	if !strings.HasPrefix(rows[0], "hi") {
+		t.Errorf("row 0 = %q, want content starting at column 0", rows[0])
+	}
+}
+
+func TestTextInputFramelessRendersAtHeightOneWhereBorderedWouldNot(t *testing.T) {
+	// The width<2||height<2 early-return in Paint exists only to keep
+	// drawBorder's corner arithmetic in bounds; it never fires on the
+	// frameless path, since that path never calls drawBorder. A
+	// frameless TextInput's whole point is fitting its natural 1-row
+	// content without border overhead, so height==1 (which a bordered
+	// TextInput can never usefully render into at all) must still work.
+	node := TextInput(TextInputOptions{Theme: style.DefaultDark(), Value: "hi", Frameless: true})
+	buf := cell.NewBuffer(4, 1)
+	paintNode(t, node, buf)
+	if !strings.Contains(buf.String(), "hi") {
+		t.Fatalf("Buffer = %q, want \"hi\" rendered into a 1-row frameless field", buf.String())
+	}
+}
+
+func TestTextInputFramelessClickSetsCursorWithoutBorderOffset(t *testing.T) {
+	var value string
+	app := textInputApp(t, TextInputOptions{
+		Theme:     style.DefaultDark(),
+		Frameless: true,
+		OnChange: func(v string) tui.Msg {
+			value = v
+			return nil
+		},
+	})
+	for _, r := range "hello" {
+		app.HandleInput(input.KeyEvent{Rune: r})
+	}
+	// No border: content starts at local X=0 directly, and content is
+	// on row Y=0 (not 1). X=2 lands on buffer offset 2 ("l").
+	app.HandleInput(input.MouseEvent{X: 2, Y: 0, Button: input.MouseLeft})
+	app.HandleInput(input.KeyEvent{Rune: 'X'})
+	if value != "heXllo" {
+		t.Fatalf("value = %q, want %q (click should have placed the cursor at offset 2 with no border offset)", value, "heXllo")
+	}
+}
+
 func TestTextInputClickDragSelectsText(t *testing.T) {
 	var value string
 	app := textInputApp(t, TextInputOptions{

@@ -24,6 +24,39 @@ func TestListPaintShowsCursorAndBorder(t *testing.T) {
 	}
 }
 
+func TestListFramelessSkipsBorderAndUsesFullRect(t *testing.T) {
+	node := List([]string{"a", "b", "c"}, 1, ListOptions{Theme: style.DefaultDark(), Frameless: true}, nil)
+	buf := cell.NewBuffer(10, 3)
+	paintNode(t, node, buf)
+
+	rows := strings.Split(buf.String(), "\n")
+	if strings.ContainsAny(rows[0], "┌┐└┘─│") {
+		t.Fatalf("row 0 = %q, want no border glyphs when Frameless", rows[0])
+	}
+	if !strings.Contains(rows[0], "a") || !strings.Contains(rows[1], ". b") || !strings.Contains(rows[2], "c") {
+		t.Errorf("rows = %v, want all 3 items visible starting at row 0", rows)
+	}
+}
+
+func TestListFramelessClickTranslatesToItemIndexWithoutBorderOffset(t *testing.T) {
+	var got input.Event
+	node := List([]string{"apple", "banana", "cherry"}, 0, ListOptions{Theme: style.DefaultDark(), Frameless: true}, func(e input.Event) tui.Msg {
+		got = e
+		return "clicked"
+	})
+	m := &widgetHostModel{node: node}
+	app := tui.NewApp(m, 12, 3) // no border rows: 3 items fill the full 3-row height
+
+	cmds := app.HandleInput(input.MouseEvent{X: 3, Y: 1, Button: input.MouseLeft})
+	if len(cmds) != 1 || cmds[0]() != "clicked" {
+		t.Fatalf("expected onEvent's Msg from the click, got cmds=%v", cmds)
+	}
+	me, ok := got.(input.MouseEvent)
+	if !ok || me.Y != 1 {
+		t.Errorf("onEvent received %v, want MouseEvent with Y=1 (item index for \"banana\")", got)
+	}
+}
+
 func TestListMultiSelectRendersCheckboxes(t *testing.T) {
 	node := List([]string{"a", "b"}, 0, ListOptions{
 		Theme:    style.DefaultDark(),

@@ -123,6 +123,31 @@ func TestTextAreaPaintShowsMultipleLines(t *testing.T) {
 	}
 }
 
+func TestTextAreaFramelessSkipsBorderAndUsesFullRect(t *testing.T) {
+	node := TextArea(TextAreaOptions{Theme: style.DefaultDark(), Value: "one\ntwo", Frameless: true})
+	buf := cell.NewBuffer(10, 2)
+	paintNode(t, node, buf)
+
+	rows := strings.Split(buf.String(), "\n")
+	if strings.ContainsAny(rows[0]+rows[1], "┌┐└┘─│") {
+		t.Fatalf("rows = %v, want no border glyphs when Frameless", rows)
+	}
+	if !strings.Contains(rows[0], "one") || !strings.Contains(rows[1], "two") {
+		t.Errorf("rows = %v, want both lines visible starting at row 0", rows)
+	}
+}
+
+func TestTextAreaFramelessClickSetsCursorWithoutBorderOffset(t *testing.T) {
+	app, value := textAreaApp(t, TextAreaOptions{Theme: style.DefaultDark(), Value: "abcd\nxy\nefgh", Frameless: true})
+	// No border to account for: line 1 ("xy") is content row Y=1 (not
+	// 2), and X=1 lands on col 1 of that line directly.
+	app.HandleInput(input.MouseEvent{X: 1, Y: 1, Button: input.MouseLeft})
+	app.HandleInput(input.KeyEvent{Rune: 'Z'})
+	if *value != "abcd\nxZy\nefgh" {
+		t.Fatalf("value = %q, want %q (click should have placed the cursor within \"xy\" with no border offset)", *value, "abcd\nxZy\nefgh")
+	}
+}
+
 func TestTextAreaPaintWideRuneNoCorruption(t *testing.T) {
 	// A wide rune (width 2) followed by another character: Paint's row
 	// loop must place the wide rune, its continuation cell, and the

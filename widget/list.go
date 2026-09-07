@@ -29,12 +29,24 @@ type ListOptions struct {
 	// convention as Selected: a caller-owned prop supplied fresh every
 	// frame, not retained state.
 	RowStyles []cell.Style
+
+	// Frameless, when true, skips drawing the border and uses the full
+	// painted rect as content area instead of insetting by one cell —
+	// for a caller that already visually separates List from its
+	// surroundings (e.g. its own Box margin) and would otherwise get a
+	// second, redundant layer of chrome. Focus stays legible without a
+	// border since it doesn't depend on one: the cursor-row reverse-
+	// video highlight and the "> "/". " marker are unaffected. Defaults
+	// to false, preserving the bordered behavior every existing caller
+	// already gets.
+	Frameless bool
 }
 
 // List is a focusable, vertically-scrolling, optionally multi-select
 // list of text rows, styled from a style.Theme and drawing its own
-// focus border directly (no tui.Focusable wrapper needed — compare
-// tui.List, the minimal M8 stand-in this supersedes). Which row is
+// focus border directly (optionally frameless — see
+// ListOptions.Frameless; no tui.Focusable wrapper needed either way —
+// compare tui.List, the minimal M8 stand-in this supersedes). Which row is
 // under the cursor is the caller's business state, passed in fresh
 // every frame via cursor (docs/DESIGN.md §3.1); the widget's own
 // retained instance owns only scrollOffset, the ephemeral state needed
@@ -73,13 +85,15 @@ func (w *listWidget) Paint(p *cell.Painter) {
 		return
 	}
 
-	border := w.opts.Theme.BorderStyle()
-	if w.focused {
-		border = w.opts.Theme.FocusStyle()
+	inner := p
+	if !w.opts.Frameless {
+		border := w.opts.Theme.BorderStyle()
+		if w.focused {
+			border = w.opts.Theme.FocusStyle()
+		}
+		drawBorder(p, width, height, border)
+		inner = p.Clip(cell.Rect{X: 1, Y: 1, W: width - 2, H: height - 2})
 	}
-	drawBorder(p, width, height, border)
-
-	inner := p.Clip(cell.Rect{X: 1, Y: 1, W: width - 2, H: height - 2})
 	_, innerH := inner.Size()
 	if innerH <= 0 || len(w.items) == 0 {
 		return
@@ -141,11 +155,14 @@ func (w *listWidget) HandleEvent(e input.Event) tui.Cmd {
 }
 
 // itemAt translates a MouseEvent's Y — local to List's full painted
-// bounds, border included, per App's hit-testing (see tui.App.hitTest)
-// — into an item index, or ok=false if it lands on the border or past
-// the last item.
+// bounds, border included (unless Frameless), per App's hit-testing
+// (see tui.App.hitTest) — into an item index, or ok=false if it lands
+// on the border or past the last item.
 func (w *listWidget) itemAt(y int) (idx int, ok bool) {
-	row := y - 1 // top border
+	row := y
+	if !w.opts.Frameless {
+		row-- // top border
+	}
 	if row < 0 {
 		return 0, false
 	}

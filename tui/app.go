@@ -421,6 +421,13 @@ func (a *App) Run() error {
 
 	os.Stdout.WriteString("\x1b[?1049h")
 	defer os.Stdout.WriteString("\x1b[?1049l")
+	// DECTCEM (cursor visibility) is independent of the alt-screen
+	// buffer and is otherwise only toggled per-frame by
+	// render.Renderer.placeCursor based on the focused widget's cursor
+	// state — restore it unconditionally so a run that ends with focus
+	// on a cursor-hiding widget doesn't leave the real terminal's
+	// cursor hidden after exit (#29).
+	defer os.Stdout.WriteString("\x1b[?25h")
 
 	caps, leftover := term.Probe(os.Stdin, os.Stdout, 500*time.Millisecond, term.DetectEnv(os.Getenv))
 	renderer := render.NewRenderer(render.Options{

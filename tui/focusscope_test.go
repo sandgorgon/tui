@@ -155,6 +155,35 @@ func TestHandleInputCallsOutsideClickerAndSkipsFocusedWidget(t *testing.T) {
 	}
 }
 
+func TestHandleInputWithholdsButSkipsOutsideClickerForNonPressEvents(t *testing.T) {
+	inner := &fakeWidget{focusable: true}
+	outsideMsg := Msg("outside-clicked")
+	scope := &overlayScopeWidget{
+		scopeWidget: scopeWidget{active: true, inner: []Widget{inner}},
+		bounds:      cell.Rect{X: 2, Y: 2, W: 4, H: 4},
+		boundsSet:   true,
+		outsideCmd:  func() Msg { return outsideMsg },
+	}
+	m := &widgetHostModel{node: Component("modal", nil, func() Widget { return scope })}
+	app := NewApp(m, 10, 10)
+
+	events := []input.MouseEvent{
+		{X: 0, Y: 0, Button: input.MouseRelease},
+		{X: 0, Y: 0, Button: input.MouseLeft, Drag: true},
+		{X: 0, Y: 0, Button: input.MouseWheelUp},
+	}
+	for _, me := range events {
+		app.HandleInput(me)
+	}
+
+	if len(scope.outsideCalls) != 0 {
+		t.Errorf("expected HandleOutsideClick not to be called for release/drag/wheel events, got %v", scope.outsideCalls)
+	}
+	if len(inner.events) != 0 {
+		t.Errorf("expected release/drag/wheel events outside overlay bounds to still be withheld from the focused widget, got events=%v", inner.events)
+	}
+}
+
 func TestAppTabStaysWithinActiveScope(t *testing.T) {
 	inner1 := &fakeWidget{focusable: true}
 	inner2 := &fakeWidget{focusable: true}

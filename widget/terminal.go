@@ -21,9 +21,10 @@ type TerminalOptions struct {
 	Command *exec.Cmd
 
 	// OnExit, if non-nil, is called after the child process exits
-	// (err is nil on a clean exit) the next time HandleEvent runs —
-	// see Terminal's doc comment for why it isn't delivered the instant
-	// the child actually exits.
+	// (err is nil on a clean exit), and its Msg is delivered on
+	// whatever App.Dispatch call runs next (tui.PendingMsgSource) — see
+	// Terminal's doc comment for why it can't fire the instant the
+	// child actually exits.
 	OnExit func(err error) tui.Msg
 
 	// WantsRawTab, if true, claims Tab for the child process (e.g.
@@ -59,20 +60,31 @@ type TerminalOptions struct {
 // released the moment its Node stops appearing in the tree (see
 // tui/dispose.go).
 //
-// Two known, deliberate limitations, both consequences of this
-// library's change-driven redraw model (docs/DESIGN.md §8, the same
-// tradeoff M6's ticker-based prototype existed specifically to avoid
-// needing): the pty's output updates Terminal's internal vt.Screen
-// state continuously in the background, but that only becomes visible
-// the next time the App happens to render a frame for any reason — an
-// app hosting a Terminal that wants live-updating output while
-// otherwise idle needs to drive its own periodic redraw (e.g. a self-
-// rescheduling Tick Cmd). And OnExit fires opportunistically, from
-// HandleEvent, rather than the instant the child exits — a retained
+// One known, deliberate limitation, a consequence of this library's
+// change-driven redraw model (docs/DESIGN.md §8, the same tradeoff
+// M6's ticker-based prototype existed specifically to avoid needing):
+// the pty's output updates Terminal's internal vt.Screen state
+// continuously in the background, but that only becomes visible the
+// next time the App happens to render a frame for any reason — an app
+// hosting a Terminal that wants live-updating output while otherwise
+// idle needs to drive its own periodic redraw (e.g. a self-
+// rescheduling Tick Cmd).
+//
+// OnExit is a sibling case of the same underlying gap — a retained
 // Widget has no channel of its own into the App's Cmd/Msg loop (only
 // Model.Update/HandleEvent can originate a Cmd), so there's no way to
-// push a notification the moment a background goroutine notices the
-// child died; the next keystroke (or any other event) picks it up.
+// push a notification the instant a background goroutine notices the
+// child died — but it doesn't cost an input event to work around:
+// Terminal implements tui.PendingMsgSource, so OnExit's Msg is
+// delivered on whatever App.Dispatch call happens to run next (a real
+// input event's own raw Dispatch(Msg(e)), or the same periodic redraw
+// Cmd already needed for live output above), not from HandleEvent. A
+// keystroke arriving before the exit is noticed still reaches
+// HandleEvent, which by then just discards it (the child is gone,
+// there's nowhere to forward it) exactly as it always would have for
+// a dead pty — it's no longer *spent proving* the child exited, so a
+// widget the app switches to on OnExit isn't missing its first
+// keystroke the way an event-triggered notification would (#33).
 func Terminal(opts TerminalOptions) tui.Node {
 	return tui.Component(nil, opts, func() tui.Widget {
 		return &terminalWidget{}
@@ -86,11 +98,12 @@ type terminalWidget struct {
 	pty *pty.Pty
 	cmd *exec.Cmd
 
-	mu      sync.Mutex
-	parser  *vt.Parser
-	screen  *vt.Screen
-	exited  bool
-	exitErr error
+	mu           sync.Mutex
+	parser       *vt.Parser
+	screen       *vt.Screen
+	exited       bool
+	exitErr      error
+	exitNotified bool
 
 	lastCols, lastRows int
 	focused            bool
@@ -207,24 +220,32 @@ func (w *terminalWidget) Paint(p *cell.Painter) {
 	}
 }
 
+// TakePendingMsg implements tui.PendingMsgSource: once the child has
+// exited, OnExit's Msg (if any) is reported exactly once, on whatever
+// App.Dispatch call runs next — see Terminal's doc comment for why
+// this, rather than HandleEvent, is what fires it.
+func (w *terminalWidget) TakePendingMsg() tui.Msg {
+	w.mu.Lock()
+	exited, exitErr, notified := w.exited, w.exitErr, w.exitNotified
+	if exited && !notified {
+		w.exitNotified = true
+	}
+	w.mu.Unlock()
+
+	if !exited || notified || w.opts.OnExit == nil {
+		return nil
+	}
+	return w.opts.OnExit(exitErr)
+}
+
 func (w *terminalWidget) HandleEvent(e input.Event) tui.Cmd {
 	w.mu.Lock()
-	exited, exitErr := w.exited, w.exitErr
+	exited := w.exited
 	mouseEnabled := w.screen != nil && w.screen.MouseMode() != vt.MouseOff
 	appCursorKeys := w.screen != nil && w.screen.AppCursorKeys()
 	w.mu.Unlock()
 
-	if exited {
-		if w.opts.OnExit == nil {
-			return nil
-		}
-		if msg := w.opts.OnExit(exitErr); msg != nil {
-			return func() tui.Msg { return msg }
-		}
-		return nil
-	}
-
-	if w.pty == nil {
+	if exited || w.pty == nil {
 		return nil
 	}
 	// A real terminal only forwards mouse events to the child once the

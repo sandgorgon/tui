@@ -183,7 +183,7 @@ func TestTerminalArrowKeySwitchesToSS3InAppCursorKeyMode(t *testing.T) {
 	}
 }
 
-func TestTerminalOnExitFiresFromHandleEvent(t *testing.T) {
+func TestTerminalOnExitFiresFromTakePendingMsg(t *testing.T) {
 	var exitErr error
 	var exitSeen bool
 	node := Terminal(TerminalOptions{
@@ -202,9 +202,23 @@ func TestTerminalOnExitFiresFromHandleEvent(t *testing.T) {
 		return strings.Contains(buf.String(), "[exited]")
 	})
 
-	cmd := widget.HandleEvent(input.KeyEvent{Rune: 'x'})
-	if cmd == nil || cmd() != "exited" {
-		t.Fatalf("expected OnExit's Msg via HandleEvent's Cmd, got %v", cmd)
+	// A keystroke arriving before OnExit fires must not be spent
+	// detecting the exit — see #33: HandleEvent should do nothing (the
+	// pty is dead, same as always) rather than consume it.
+	if cmd := widget.HandleEvent(input.KeyEvent{Rune: 'x'}); cmd != nil {
+		t.Fatalf("HandleEvent on an exited Terminal = %v, want nil (detection no longer happens here)", cmd)
+	}
+	if exitSeen {
+		t.Fatal("OnExit fired from HandleEvent, want it to fire only from TakePendingMsg")
+	}
+
+	src, ok := widget.(tui.PendingMsgSource)
+	if !ok {
+		t.Fatal("terminal widget does not implement tui.PendingMsgSource")
+	}
+	msg := src.TakePendingMsg()
+	if msg != "exited" {
+		t.Fatalf("TakePendingMsg() = %v, want OnExit's Msg", msg)
 	}
 	if !exitSeen {
 		t.Fatal("OnExit was not called")
@@ -212,9 +226,76 @@ func TestTerminalOnExitFiresFromHandleEvent(t *testing.T) {
 	if exitErr != nil {
 		t.Errorf("exitErr = %v, want nil (\"true\" exits cleanly)", exitErr)
 	}
+	if msg := src.TakePendingMsg(); msg != nil {
+		t.Errorf("TakePendingMsg() after already consumed = %v, want nil", msg)
+	}
 
 	if err := tr.Close(); err != nil {
 		t.Errorf("Close: %v", err)
+	}
+}
+
+// terminalExitedMsg and terminalSwapModel reproduce #33's real scenario:
+// a host that swaps a Terminal pane out for a different focusable widget
+// once OnExit fires.
+type terminalExitedMsg struct{}
+
+type terminalSwapModel struct{ swapped bool }
+
+func (m *terminalSwapModel) Init() tui.Cmd { return nil }
+func (m *terminalSwapModel) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
+	if _, ok := msg.(terminalExitedMsg); ok {
+		m.swapped = true
+	}
+	return m, nil
+}
+func (m *terminalSwapModel) View() tui.Node {
+	if m.swapped {
+		return tui.Focusable("after", tui.Text("after", cell.Style{}), func(e input.Event) tui.Msg {
+			return e
+		})
+	}
+	return Terminal(TerminalOptions{
+		Command: exec.Command("true"),
+		OnExit:  func(error) tui.Msg { return terminalExitedMsg{} },
+	})
+}
+
+// TestTerminalOnExitDoesNotSwallowTriggeringKeystroke is the regression
+// test for #33: previously, the keystroke that HandleEvent used to
+// detect the child's exit was discarded — never forwarded to the pty
+// (already dead) and never delivered to whatever widget the app
+// switched to in reaction to OnExit, so it silently did nothing. With
+// OnExit now delivered via tui.PendingMsgSource instead (drained by
+// App.Dispatch before the focused widget's HandleEvent runs, see
+// App.handleInput), the swap happens first and the same keystroke
+// reaches the new widget in the same input cycle.
+func TestTerminalOnExitDoesNotSwallowTriggeringKeystroke(t *testing.T) {
+	m := &terminalSwapModel{}
+	app := tui.NewApp(m, 10, 2)
+	defer closeApp(t, app)
+
+	// Poll via Resize rather than Dispatch/HandleInput: Resize only
+	// re-renders (see App.Resize), it never drains a PendingMsgSource,
+	// so this can't accidentally perform the very swap under test before
+	// the real keystroke below does.
+	waitFor(t, 2*time.Second, func() { app.Resize(10, 2) }, func() bool {
+		return strings.Contains(app.Buffer().String(), "[exited]")
+	})
+	if m.swapped {
+		t.Fatal("model swapped before the triggering keystroke was sent")
+	}
+
+	trigger := input.KeyEvent{Rune: 'p'}
+	cmds := app.HandleInput(trigger)
+	if !m.swapped {
+		t.Fatal("model did not swap away from Terminal on the triggering keystroke")
+	}
+	if len(cmds) != 1 {
+		t.Fatalf("cmds = %d, want 1 (the new focused widget's onEvent)", len(cmds))
+	}
+	if got := cmds[0](); got != tui.Msg(trigger) {
+		t.Errorf("triggering keystroke delivered to new widget = %v, want %v", got, trigger)
 	}
 }
 

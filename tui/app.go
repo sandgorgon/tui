@@ -75,12 +75,32 @@ func (a *App) Close() error {
 
 // Dispatch feeds msg through Model.Update, re-reconciles the Node tree
 // against the resulting View(), repaints, and returns any Cmd Update
-// produced (nil if none).
+// produced (nil if none) — combined, via Batch, with any Cmd produced
+// by recursively Dispatching whatever PendingMsgSource Msgs the new
+// tree's widgets report (see pending.go). Draining those here, rather
+// than in some separate step, means every path that already calls
+// Dispatch — a real input event's own raw Dispatch(Msg(e)) in
+// handleInput, and a host's periodic redraw Cmd landing back in Run's
+// msgCh loop — doubles as the delivery mechanism for them, with no
+// extra plumbing needed at either call site.
 func (a *App) Dispatch(msg Msg) Cmd {
 	model, cmd := a.model.Update(msg)
 	a.model = model
 	a.render()
-	return cmd
+	pending := collectPendingMsgs(a.root)
+	if len(pending) == 0 {
+		return cmd
+	}
+	cmds := make([]Cmd, 0, len(pending)+1)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	for _, pm := range pending {
+		if follow := a.Dispatch(pm); follow != nil {
+			cmds = append(cmds, follow)
+		}
+	}
+	return Batch(cmds...)
 }
 
 // Resize changes the frame buffer's size and repaints. A Box-based

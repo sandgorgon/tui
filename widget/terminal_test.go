@@ -149,6 +149,40 @@ func TestTerminalMouseEventsSuppressedWithoutMouseMode(t *testing.T) {
 	}
 }
 
+// TestTerminalArrowKeySwitchesToSS3InAppCursorKeyMode is the
+// integration-level regression test for the same "vt.Screen already
+// tracks this, Terminal just wasn't consulting it" gap as the mouse
+// fix above, but for DECCKM (CSI ?1h/l) instead of mouse reporting:
+// once the child enables application cursor-key mode, an unmodified
+// arrow key must be encoded as the SS3 form ("ESC O A") instead of the
+// default CSI form ("ESC [ A") — see namedKeySequence in
+// terminal_encode.go and TestEncodeEventRoundTripsAppCursorKeys for
+// the encoder-level unit test.
+func TestTerminalArrowKeySwitchesToSS3InAppCursorKeyMode(t *testing.T) {
+	node := Terminal(TerminalOptions{
+		Command: exec.Command("sh", "-c", `printf '\033[?1h'; echo READY; exec cat -v`),
+	})
+	buf := cell.NewBuffer(30, 3)
+	var tr tui.Tree
+	tr.Reconcile(node)
+	tr.Paint(cell.NewPainter(buf))
+
+	waitFor(t, 2*time.Second, func() { tr.Paint(cell.NewPainter(buf)) }, func() bool {
+		return strings.Contains(buf.String(), "READY")
+	})
+
+	widget := tr.Focusables()[0]
+	widget.HandleEvent(input.KeyEvent{Key: input.KeyUp})
+
+	waitFor(t, 2*time.Second, func() { tr.Paint(cell.NewPainter(buf)) }, func() bool {
+		return strings.Contains(buf.String(), "^[OA")
+	})
+
+	if err := tr.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
 func TestTerminalOnExitFiresFromHandleEvent(t *testing.T) {
 	var exitErr error
 	var exitSeen bool

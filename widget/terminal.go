@@ -211,6 +211,7 @@ func (w *terminalWidget) HandleEvent(e input.Event) tui.Cmd {
 	w.mu.Lock()
 	exited, exitErr := w.exited, w.exitErr
 	mouseEnabled := w.screen != nil && w.screen.MouseMode() != vt.MouseOff
+	appCursorKeys := w.screen != nil && w.screen.AppCursorKeys()
 	w.mu.Unlock()
 
 	if exited {
@@ -234,7 +235,7 @@ func (w *terminalWidget) HandleEvent(e input.Event) tui.Cmd {
 	if _, isMouse := e.(input.MouseEvent); isMouse && !mouseEnabled {
 		return nil
 	}
-	if b := encodeEvent(e); len(b) > 0 {
+	if b := encodeEvent(e, appCursorKeys); len(b) > 0 {
 		_, _ = w.pty.Write(b)
 	}
 	return nil

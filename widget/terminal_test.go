@@ -77,27 +77,40 @@ func TestTerminalHandleEventWritesToChild(t *testing.T) {
 	}
 }
 
-// TestTerminalMouseEventsForwardLocalCoordinates confirms Terminal
-// needs no widget-level change for App's mouse hit-testing to work:
-// it already forwards whatever input.Event it's given straight into
-// encodeMouse, and App has already translated a click's coordinates to
-// be local to Terminal's own bounds by the time HandleEvent sees it
-// (see tui.App.hitTest) — exactly what a real program running inside
-// (vim, tmux, ...) expects: mouse coordinates relative to its own
-// pane, not the outer screen.
+// TestTerminalMouseEventsForwardLocalCoordinates confirms that once a
+// child has opted into mouse reporting (DECSET 1000/1006 — see
+// TestTerminalMouseEventsSuppressedWithoutMouseMode for the off-by-
+// default case this guards), Terminal needs no widget-level change for
+// App's mouse hit-testing to work: it forwards the input.Event straight
+// into encodeMouse, and App has already translated a click's
+// coordinates to be local to Terminal's own bounds by the time
+// HandleEvent sees it (see tui.App.hitTest) — exactly what a real
+// program running inside (vim, tmux, ...) expects: mouse coordinates
+// relative to its own pane, not the outer screen.
 //
-// "cat -v" (not plain "cat") is used deliberately: it renders control
-// bytes as visible caret notation (ESC becomes "^[") instead of our
-// own vt.Parser interpreting the echoed escape sequence as a real
-// mouse report, which — since it's a valid CSI sequence — wouldn't
-// produce any visible text to assert against at all.
+// The child shell first enables mouse mode itself, then echoes a
+// "READY" sentinel before exec-ing into "cat -v" — the test waits for
+// that sentinel so the click isn't sent until vt.Screen has actually
+// processed the DECSET sequence (Terminal gates mouse forwarding on
+// vt.Screen.MouseMode(), which updates asynchronously as pty output is
+// read). "cat -v" (not plain "cat") renders control bytes as visible
+// caret notation (ESC becomes "^[") instead of our own vt.Parser
+// interpreting the echoed escape sequence as a real mouse report,
+// which — since it's a valid CSI sequence — wouldn't produce any
+// visible text to assert against at all.
 func TestTerminalMouseEventsForwardLocalCoordinates(t *testing.T) {
 	m := &widgetHostModel{node: tui.Box(layout.Horizontal,
 		tui.Child(layout.Length(5), tui.Text("spacer", cell.Style{})),
-		tui.Child(layout.Fill(1), Terminal(TerminalOptions{Command: exec.Command("cat", "-v")})),
+		tui.Child(layout.Fill(1), Terminal(TerminalOptions{
+			Command: exec.Command("sh", "-c", `printf '\033[?1000h\033[?1006h'; echo READY; exec cat -v`),
+		})),
 	)}
 	app := tui.NewApp(m, 30, 6)
 	defer closeApp(t, app)
+
+	waitFor(t, 2*time.Second, func() { app.Dispatch("noop") }, func() bool {
+		return strings.Contains(app.Buffer().String(), "READY")
+	})
 
 	// Absolute (7,1): the Terminal pane starts at absolute X=5, so this
 	// should reach it as local (2,1) — encoded as SGR X=3,Y=2 (1-based).
@@ -106,6 +119,68 @@ func TestTerminalMouseEventsForwardLocalCoordinates(t *testing.T) {
 	waitFor(t, 2*time.Second, func() { app.Dispatch("noop") }, func() bool {
 		return strings.Contains(app.Buffer().String(), "^[[<0;3;2M")
 	})
+}
+
+// TestTerminalMouseEventsSuppressedWithoutMouseMode is the regression
+// test for the bug fixed alongside TestTerminalMouseEventsForwardLocalCoordinates's
+// update: a child that never enables mouse reporting (a plain shell, as
+// opposed to vim/tmux/etc.) must not receive raw SGR mouse bytes as
+// literal keyboard input. Before the fix, Terminal forwarded every
+// mouse event unconditionally regardless of the child's own DECSET
+// state; now it checks vt.Screen.MouseMode() first.
+func TestTerminalMouseEventsSuppressedWithoutMouseMode(t *testing.T) {
+	m := &widgetHostModel{node: tui.Box(layout.Horizontal,
+		tui.Child(layout.Length(5), tui.Text("spacer", cell.Style{})),
+		tui.Child(layout.Fill(1), Terminal(TerminalOptions{Command: exec.Command("cat", "-v")})),
+	)}
+	app := tui.NewApp(m, 30, 6)
+	defer closeApp(t, app)
+
+	// Give the child a moment to start before the click, then a moment
+	// after for a (bug-triggering) write to have shown up if it were
+	// going to.
+	waitFor(t, 2*time.Second, func() { app.Dispatch("noop") }, func() bool { return true })
+	app.HandleInput(input.MouseEvent{X: 7, Y: 1, Button: input.MouseLeft})
+	time.Sleep(100 * time.Millisecond)
+	app.Dispatch("noop")
+
+	if strings.Contains(app.Buffer().String(), "^[[<") {
+		t.Errorf("Buffer = %q, want no forwarded mouse sequence (child never enabled mouse mode)", app.Buffer().String())
+	}
+}
+
+// TestTerminalArrowKeySwitchesToSS3InAppCursorKeyMode is the
+// integration-level regression test for the same "vt.Screen already
+// tracks this, Terminal just wasn't consulting it" gap as the mouse
+// fix above, but for DECCKM (CSI ?1h/l) instead of mouse reporting:
+// once the child enables application cursor-key mode, an unmodified
+// arrow key must be encoded as the SS3 form ("ESC O A") instead of the
+// default CSI form ("ESC [ A") — see namedKeySequence in
+// terminal_encode.go and TestEncodeEventRoundTripsAppCursorKeys for
+// the encoder-level unit test.
+func TestTerminalArrowKeySwitchesToSS3InAppCursorKeyMode(t *testing.T) {
+	node := Terminal(TerminalOptions{
+		Command: exec.Command("sh", "-c", `printf '\033[?1h'; echo READY; exec cat -v`),
+	})
+	buf := cell.NewBuffer(30, 3)
+	var tr tui.Tree
+	tr.Reconcile(node)
+	tr.Paint(cell.NewPainter(buf))
+
+	waitFor(t, 2*time.Second, func() { tr.Paint(cell.NewPainter(buf)) }, func() bool {
+		return strings.Contains(buf.String(), "READY")
+	})
+
+	widget := tr.Focusables()[0]
+	widget.HandleEvent(input.KeyEvent{Key: input.KeyUp})
+
+	waitFor(t, 2*time.Second, func() { tr.Paint(cell.NewPainter(buf)) }, func() bool {
+		return strings.Contains(buf.String(), "^[OA")
+	})
+
+	if err := tr.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
 }
 
 func TestTerminalOnExitFiresFromHandleEvent(t *testing.T) {

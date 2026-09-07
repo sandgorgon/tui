@@ -210,6 +210,8 @@ func (w *terminalWidget) Paint(p *cell.Painter) {
 func (w *terminalWidget) HandleEvent(e input.Event) tui.Cmd {
 	w.mu.Lock()
 	exited, exitErr := w.exited, w.exitErr
+	mouseEnabled := w.screen != nil && w.screen.MouseMode() != vt.MouseOff
+	appCursorKeys := w.screen != nil && w.screen.AppCursorKeys()
 	w.mu.Unlock()
 
 	if exited {
@@ -225,7 +227,15 @@ func (w *terminalWidget) HandleEvent(e input.Event) tui.Cmd {
 	if w.pty == nil {
 		return nil
 	}
-	if b := encodeEvent(e); len(b) > 0 {
+	// A real terminal only forwards mouse events to the child once the
+	// child has opted in via DECSET 1000/1002/1003 etc. (watched for by
+	// vt.Screen, the same parser driving Paint) — otherwise a plain
+	// shell with no mouse mode enabled receives raw SGR bytes as literal
+	// keyboard input.
+	if _, isMouse := e.(input.MouseEvent); isMouse && !mouseEnabled {
+		return nil
+	}
+	if b := encodeEvent(e, appCursorKeys); len(b) > 0 {
 		_, _ = w.pty.Write(b)
 	}
 	return nil

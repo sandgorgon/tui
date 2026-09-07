@@ -17,10 +17,10 @@ import (
 // input/decode.go parses for it, so the two stay consistent by
 // construction rather than by two independently-written encodings
 // happening to agree.
-func encodeEvent(e input.Event) []byte {
+func encodeEvent(e input.Event, appCursorKeys bool) []byte {
 	switch ev := e.(type) {
 	case input.KeyEvent:
-		return encodeKey(ev)
+		return encodeKey(ev, appCursorKeys)
 	case input.MouseEvent:
 		return encodeMouse(ev)
 	case input.PasteEvent:
@@ -30,7 +30,7 @@ func encodeEvent(e input.Event) []byte {
 	}
 }
 
-func encodeKey(ke input.KeyEvent) []byte {
+func encodeKey(ke input.KeyEvent, appCursorKeys bool) []byte {
 	if ke.Key == input.KeyNone && ke.Rune != 0 {
 		if ke.Mod&input.ModCtrl != 0 {
 			r := unicode.ToUpper(ke.Rune)
@@ -45,7 +45,7 @@ func encodeKey(ke input.KeyEvent) []byte {
 		return append(prefix, []byte(string(ke.Rune))...)
 	}
 
-	if seq, ok := namedKeySequence(ke.Key, ke.Mod); ok {
+	if seq, ok := namedKeySequence(ke.Key, ke.Mod, appCursorKeys); ok {
 		return seq
 	}
 	return nil
@@ -73,8 +73,14 @@ func modCode(m input.Mod) int {
 
 // namedKeySequence encodes a non-rune Key, in the legacy xterm form
 // (an unmodified arrow is "ESC [ A"; a modified one is "ESC [ 1 ; N
-// A") that input/decode.go's arrowEvent/tildeEvent parse.
-func namedKeySequence(k input.Key, mod input.Mod) ([]byte, bool) {
+// A") that input/decode.go's arrowEvent/tildeEvent parse — unless
+// appCursorKeys (DECCKM, set by the child via CSI ?1h/l and tracked by
+// vt.Screen) is on, in which case an unmodified arrow/Home/End instead
+// gets the application-mode SS3 form ("ESC O A"), the exact inverse of
+// input/decode.go's decodeSS3. Real terminals only apply DECCKM to the
+// unmodified key — a modified arrow always has to fall back to the CSI
+// form since SS3 has no room for a modifier parameter.
+func namedKeySequence(k input.Key, mod input.Mod, appCursorKeys bool) ([]byte, bool) {
 	switch k {
 	case input.KeyEnter:
 		return []byte{'\r'}, true
@@ -95,6 +101,9 @@ func namedKeySequence(k input.Key, mod input.Mod) ([]byte, bool) {
 	}
 	if mod == 0 {
 		if letter != 0 {
+			if appCursorKeys {
+				return []byte{0x1b, 'O', letter}, true
+			}
 			return []byte{0x1b, '[', letter}, true
 		}
 		return fmt.Appendf(nil, "\x1b[%d~", tilde), true

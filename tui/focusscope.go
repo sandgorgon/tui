@@ -66,7 +66,11 @@ type OverlayBounds interface {
 // OutsideClicker is implemented by an active FocusScope that also wants
 // to react to a mouse click landing outside its own OverlayBounds
 // (e.g. closing the overlay) rather than just having App.HandleInput
-// silently withhold it. me is in absolute screen coordinates, the same
+// silently withhold it. App.HandleInput only invokes HandleOutsideClick
+// for a genuine left-button press (Button == MouseLeft, Drag == false)
+// outside the bounds — a release, drag, or wheel event landing there is
+// still withheld from the focused widget but does not reach
+// HandleOutsideClick. me is in absolute screen coordinates, the same
 // space OverlayBounds reports in.
 type OutsideClicker interface {
 	HandleOutsideClick(me input.MouseEvent) Cmd

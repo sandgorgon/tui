@@ -234,7 +234,7 @@ func (a *App) handleInput(e input.Event) (dispatchCmd Cmd, widgetCmd Cmd, widget
 			if ob, ok := scope.(OverlayBounds); ok {
 				if r, ok := ob.OverlayBounds(); ok && !rectContains(r, me.X, me.Y) {
 					deliverToFocused = false
-					if oc, ok := scope.(OutsideClicker); ok {
+					if oc, ok := scope.(OutsideClicker); ok && me.Button == input.MouseLeft && !me.Drag {
 						widgetCmd = oc.HandleOutsideClick(me)
 						widgetFirst = true
 					}

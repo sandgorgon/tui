@@ -41,36 +41,53 @@ type Theme struct {
 
 // DefaultDark is a sensible default Theme for a dark terminal
 // background.
+//
+// Every role here is chosen to survive three degradations a plain
+// truecolor pick doesn't account for, checked against a representative
+// dark background (#1e1e1e): WCAG contrast (Border >=3:1, the non-text/
+// UI-component minimum; everything else >=4.5:1), a red-green
+// colorblindness simulation (Success/Warning/Error stay well separated
+// under both protanopia and deuteranopia, not just in raw hue), and
+// render.rgbToIndexed16's nearest-ANSI-16 downsampling (used for the
+// Color16 terminal tier declared in package term) landing each of
+// Success/Warning/Error on its own distinct slot instead of collapsing
+// together. See style/theme_test.go for the regression checks.
 func DefaultDark() Theme {
 	return Theme{
 		Appearance: Dark,
 		Primary:    cell.RGBColor(97, 175, 239),
 		Secondary:  cell.RGBColor(198, 120, 221),
 		Accent:     cell.RGBColor(86, 182, 194),
-		Muted:      cell.RGBColor(92, 99, 112),
-		Border:     cell.RGBColor(60, 66, 78),
+		Muted:      cell.RGBColor(145, 151, 163),
+		Border:     cell.RGBColor(112, 120, 134),
 		Focus:      cell.RGBColor(97, 175, 239),
-		Success:    cell.RGBColor(152, 195, 121),
-		Warning:    cell.RGBColor(229, 192, 123),
-		Error:      cell.RGBColor(224, 108, 117),
+		Success:    cell.RGBColor(35, 212, 85),
+		Warning:    cell.RGBColor(255, 220, 4),
+		Error:      cell.RGBColor(225, 95, 30),
 		Info:       cell.RGBColor(86, 182, 194),
 	}
 }
 
 // DefaultLight is a sensible default Theme for a light terminal
 // background.
+//
+// Tuned against a representative light background (#f5f5f5) under the
+// same constraints as DefaultDark: WCAG contrast, colorblindness
+// separation for Success/Warning/Error, and distinct ANSI-16 slots for
+// that same trio. See DefaultDark's doc comment and
+// style/theme_test.go.
 func DefaultLight() Theme {
 	return Theme{
 		Appearance: Light,
 		Primary:    cell.RGBColor(33, 110, 182),
 		Secondary:  cell.RGBColor(136, 54, 157),
 		Accent:     cell.RGBColor(19, 124, 134),
-		Muted:      cell.RGBColor(140, 140, 140),
-		Border:     cell.RGBColor(200, 200, 205),
+		Muted:      cell.RGBColor(118, 118, 122),
+		Border:     cell.RGBColor(132, 132, 140),
 		Focus:      cell.RGBColor(33, 110, 182),
-		Success:    cell.RGBColor(58, 130, 45),
-		Warning:    cell.RGBColor(163, 110, 0),
-		Error:      cell.RGBColor(179, 45, 50),
+		Success:    cell.RGBColor(3, 138, 94),
+		Warning:    cell.RGBColor(150, 111, 18),
+		Error:      cell.RGBColor(148, 9, 31),
 		Info:       cell.RGBColor(19, 124, 134),
 	}
 }

@@ -170,6 +170,16 @@ func (s *Screen) SynchronizedOutput() bool     { return s.synchronizedOutput }
 // doesn't act on this, it's informational for that future consumer.
 func (s *Screen) AppCursorKeys() bool { return s.appCursorKeys }
 
+// AltScreenActive reports whether the alternate screen buffer is
+// currently active (DECSET 1049 and friends — see modeAltScreen).
+// Informational for a host deciding whether to treat a key like
+// PageUp/PageDown as scrollback navigation or forward it to the child:
+// full-screen programs on the alt screen (vim, htop, less, ...) manage
+// their own scrolling and never contribute to scrollback in the first
+// place (see scrollback.go's doc comment), so a host stealing those
+// keys there would fight the program instead of complementing it.
+func (s *Screen) AltScreenActive() bool { return s.useAlt }
+
 // TakeResponses returns and clears any bytes queued for writing back to
 // the pty (DA1/DA2/DSR/CPR replies) since the last call. Screen has no
 // direct access to a writer by design — that's an I/O concern for the

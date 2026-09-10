@@ -442,6 +442,144 @@ func TestTerminalCustomReleaseKey(t *testing.T) {
 	}
 }
 
+// TestTerminalPageUpScrollsIntoScrollback is the regression test for
+// #38: PageUp used to do nothing (forwarded straight to the child, a
+// plain shell that has no use for it) even though vt.Screen was
+// already holding scrolled-off lines in scrollback. With height 3 and
+// 20 lines of output, line1 has long since scrolled off the visible
+// screen; PageUp enough times should bring it back into view via
+// paintScrolled, and Paint should show the "[scrollback N/M]"
+// indicator while scrolled.
+func TestTerminalPageUpScrollsIntoScrollback(t *testing.T) {
+	node := Terminal(TerminalOptions{
+		Command: exec.Command("sh", "-c", `for i in $(seq 1 20); do echo line$i; done; exec cat`),
+	})
+	// Wide enough that the "[scrollback N/M]" indicator (painted in
+	// the top-right corner) doesn't overlap "line1" in the top-left.
+	buf := cell.NewBuffer(30, 3)
+	var tr tui.Tree
+	tr.Reconcile(node)
+
+	waitFor(t, 2*time.Second, func() { tr.Paint(cell.NewPainter(buf)) }, func() bool {
+		return strings.Contains(buf.String(), "line20")
+	})
+	if strings.Contains(buf.String(), "line1\n") || strings.Contains(buf.String(), "line1 ") {
+		t.Fatalf("line1 unexpectedly still visible before scrolling back: %q", buf.String())
+	}
+
+	widget := tr.Focusables()[0]
+	for range 10 {
+		widget.HandleEvent(input.KeyEvent{Key: input.KeyPgUp})
+	}
+	tr.Paint(cell.NewPainter(buf))
+
+	if !strings.Contains(buf.String(), "line1") {
+		t.Errorf("Buffer = %q, want line1 visible after scrolling back", buf.String())
+	}
+	if !strings.Contains(buf.String(), "[scrollback ") {
+		t.Errorf("Buffer = %q, want a scrollback indicator while scrolled", buf.String())
+	}
+
+	// A keystroke reaching the child snaps the view back to live and is
+	// itself forwarded — the kernel pty's own ECHO (not cat) is what
+	// makes 'z' show up, same as TestTerminalHandleEventWritesToChild.
+	widget.HandleEvent(input.KeyEvent{Rune: 'z'})
+	waitFor(t, 2*time.Second, func() { tr.Paint(cell.NewPainter(buf)) }, func() bool {
+		return strings.ContainsRune(buf.String(), 'z') && !strings.Contains(buf.String(), "[scrollback ")
+	})
+
+	if err := tr.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+// TestTerminalWheelScrollsScrollbackWithoutMouseMode confirms a wheel
+// tick scrolls scrollback (instead of being silently dropped, its old
+// behavior) when the child hasn't enabled mouse reporting.
+func TestTerminalWheelScrollsScrollbackWithoutMouseMode(t *testing.T) {
+	node := Terminal(TerminalOptions{
+		Command: exec.Command("sh", "-c", `for i in $(seq 1 20); do echo line$i; done; exec cat`),
+	})
+	buf := cell.NewBuffer(20, 3)
+	var tr tui.Tree
+	tr.Reconcile(node)
+
+	waitFor(t, 2*time.Second, func() { tr.Paint(cell.NewPainter(buf)) }, func() bool {
+		return strings.Contains(buf.String(), "line20")
+	})
+
+	widget := tr.Focusables()[0]
+	for range 10 {
+		widget.HandleEvent(input.MouseEvent{Button: input.MouseWheelUp})
+	}
+	tr.Paint(cell.NewPainter(buf))
+
+	if !strings.Contains(buf.String(), "[scrollback ") {
+		t.Errorf("Buffer = %q, want a scrollback indicator after wheel-up ticks", buf.String())
+	}
+
+	if err := tr.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+// TestTerminalPageUpForwardedOnAltScreen confirms PageUp is forwarded
+// to the child, not intercepted for scrollback, while it's running a
+// full-screen (alt-screen) program — vim/htop/less manage their own
+// scrolling and never contribute to scrollback (see
+// vt.Screen.AltScreenActive's doc comment); stealing the key here
+// would fight the child instead of helping it. "cat -v" makes the
+// forwarded escape sequence ("ESC [ 5 ~") visible as literal text.
+func TestTerminalPageUpForwardedOnAltScreen(t *testing.T) {
+	node := Terminal(TerminalOptions{
+		Command: exec.Command("sh", "-c", `printf '\033[?1049h'; echo READY; exec cat -v`),
+	})
+	buf := cell.NewBuffer(30, 3)
+	var tr tui.Tree
+	tr.Reconcile(node)
+	tr.Paint(cell.NewPainter(buf))
+
+	waitFor(t, 2*time.Second, func() { tr.Paint(cell.NewPainter(buf)) }, func() bool {
+		return strings.Contains(buf.String(), "READY")
+	})
+
+	widget := tr.Focusables()[0]
+	widget.HandleEvent(input.KeyEvent{Key: input.KeyPgUp})
+
+	waitFor(t, 2*time.Second, func() { tr.Paint(cell.NewPainter(buf)) }, func() bool {
+		return strings.Contains(buf.String(), "^[[5~")
+	})
+
+	if err := tr.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+// TestTerminalDisableScrollbackForwardsPageUp confirms
+// TerminalOptions.DisableScrollback turns off scrollback interception
+// entirely, so PageUp reaches the child even on the primary screen.
+func TestTerminalDisableScrollbackForwardsPageUp(t *testing.T) {
+	node := Terminal(TerminalOptions{
+		Command:           exec.Command("cat", "-v"),
+		DisableScrollback: true,
+	})
+	buf := cell.NewBuffer(30, 3)
+	var tr tui.Tree
+	tr.Reconcile(node)
+	tr.Paint(cell.NewPainter(buf))
+
+	widget := tr.Focusables()[0]
+	widget.HandleEvent(input.KeyEvent{Key: input.KeyPgUp})
+
+	waitFor(t, 2*time.Second, func() { tr.Paint(cell.NewPainter(buf)) }, func() bool {
+		return strings.Contains(buf.String(), "^[[5~")
+	})
+
+	if err := tr.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
 // closeApp closes app entirely — used by the raw-tab tests
 // above to release the Terminal's pty/goroutine, since
 // terminalAndFocusable doesn't expose the App's retained tree

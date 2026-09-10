@@ -32,7 +32,7 @@ func TestDefaultThemesSetEverySemanticRole(t *testing.T) {
 	for _, th := range []Theme{DefaultDark(), DefaultLight()} {
 		roles := map[string]cell.Color{
 			"Primary": th.Primary, "Secondary": th.Secondary, "Accent": th.Accent,
-			"Muted": th.Muted, "Border": th.Border, "Focus": th.Focus,
+			"Muted": th.Muted, "Border": th.Border, "Focus": th.Focus, "Chrome": th.Chrome,
 			"Success": th.Success, "Warning": th.Warning, "Error": th.Error, "Info": th.Info,
 		}
 		for name, c := range roles {
@@ -86,6 +86,10 @@ func relativeLuminance(r, g, b uint8) float64 {
 // 4.0:1 floor documented on DefaultDark/DefaultLight (deliberately
 // just under the 4.5:1 AA body-text threshold, since Muted in
 // particular is meant to visually recede, not read like body text).
+// Chrome is checked here against the representative terminal
+// background too (it's occasionally composed straight over it, e.g.
+// via Text()-style usage), but its load-bearing guarantee is against
+// Border itself — see TestChromeTextReadableOnBorder.
 func TestDefaultThemesMeetContrastMinimums(t *testing.T) {
 	for _, th := range []Theme{DefaultDark(), DefaultLight()} {
 		bgR, bgG, bgB := representativeBg(th.Appearance)
@@ -101,9 +105,30 @@ func TestDefaultThemesMeetContrastMinimums(t *testing.T) {
 		check("Accent", th.Accent, 4.0)
 		check("Muted", th.Muted, 4.0)
 		check("Border", th.Border, 3.0)
+		check("Chrome", th.Chrome, 4.0)
 		check("Success", th.Success, 4.0)
 		check("Warning", th.Warning, 4.0)
 		check("Error", th.Error, 4.0)
+	}
+}
+
+// TestChromeTextReadableOnBorder guards against the gap that let
+// MutedText-on-Border ship at ~1.2-1.5:1 contrast (near-unreadable —
+// see the issue that added Chrome/ChromeText): unlike every other
+// role, Border is routinely used as a *background* (BorderStyle()'s
+// Fg, reused as Bg for a tinted chrome panel — a status bar or
+// gutter), so whatever text goes on top of it needs its contrast
+// checked against Border itself, not just against the terminal
+// background. Chrome is the role meant for exactly that composition;
+// it's held to the real 4.5:1 AA body-text minimum here (not the
+// relaxed 4.0:1 floor used elsewhere for roles like Muted that are
+// deliberately allowed to recede) since it has no other job.
+func TestChromeTextReadableOnBorder(t *testing.T) {
+	for _, th := range []Theme{DefaultDark(), DefaultLight()} {
+		got := wcagContrast(th.Chrome.R, th.Chrome.G, th.Chrome.B, th.Border.R, th.Border.G, th.Border.B)
+		if got < 4.5 {
+			t.Errorf("%v theme: Chrome %v on Border %v = %.2f contrast, want >= 4.5", th.Appearance, th.Chrome, th.Border, got)
+		}
 	}
 }
 
@@ -260,6 +285,9 @@ func TestThemeStyleHelpersUseExpectedRoles(t *testing.T) {
 	}
 	if got := th.BorderStyle(); got.Fg != th.Border {
 		t.Errorf("BorderStyle().Fg = %+v, want theme.Border", got.Fg)
+	}
+	if got := th.ChromeText(); got.Fg != th.Chrome || got.Bg != th.Border {
+		t.Errorf("ChromeText() = %+v, want Fg=theme.Chrome, Bg=theme.Border", got)
 	}
 	focus := th.FocusStyle()
 	if focus.Fg != th.Focus {

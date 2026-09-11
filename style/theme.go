@@ -53,7 +53,11 @@ type Theme struct {
 	Success cell.Color
 	Warning cell.Color
 	Error   cell.Color
-	Info    cell.Color
+
+	// Info is a distinct indigo/blue-violet, deliberately a different
+	// hue from both Primary (blue) and Accent (cyan/teal) — see
+	// style/theme_test.go's TestAccentAndInfoAreDistinct.
+	Info cell.Color
 }
 
 // DefaultDark is a sensible default Theme for a dark terminal
@@ -85,7 +89,7 @@ func DefaultDark() Theme {
 		Success:    cell.RGBColor(35, 212, 85),
 		Warning:    cell.RGBColor(255, 220, 4),
 		Error:      cell.RGBColor(225, 95, 30),
-		Info:       cell.RGBColor(86, 182, 194),
+		Info:       cell.RGBColor(100, 130, 240),
 	}
 }
 
@@ -110,7 +114,7 @@ func DefaultLight() Theme {
 		Success:    cell.RGBColor(3, 138, 94),
 		Warning:    cell.RGBColor(150, 111, 18),
 		Error:      cell.RGBColor(148, 9, 31),
-		Info:       cell.RGBColor(19, 124, 134),
+		Info:       cell.RGBColor(61, 82, 196),
 	}
 }
 

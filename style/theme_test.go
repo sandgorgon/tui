@@ -109,6 +109,7 @@ func TestDefaultThemesMeetContrastMinimums(t *testing.T) {
 		check("Success", th.Success, 4.0)
 		check("Warning", th.Warning, 4.0)
 		check("Error", th.Error, 4.0)
+		check("Info", th.Info, 4.0)
 	}
 }
 
@@ -270,6 +271,29 @@ func TestAlertTriadDistinctOn16ColorTerminals(t *testing.T) {
 			if len(names) > 1 {
 				t.Errorf("%v theme: %v all downsample to the same ANSI-16 color (slot %d) on a Color16 terminal", th.Appearance, names, slot)
 			}
+		}
+	}
+}
+
+// TestAccentAndInfoAreDistinct guards against the regression where
+// DefaultDark/DefaultLight gave Accent and Info the identical RGB
+// value (github.com/sandgorgon/tui#40): a consumer picking theme
+// roles by reading Theme's field list has no way to discover a
+// collision like that short of diffing the raw RGB values, so it's
+// checked here the same way the Success/Warning/Error triad is —
+// raw-RGB distinctness plus distinct ANSI-16 slots, so the two roles
+// don't collapse together on a Color16 terminal either.
+func TestAccentAndInfoAreDistinct(t *testing.T) {
+	for _, th := range []Theme{DefaultDark(), DefaultLight()} {
+		if th.Accent == th.Info {
+			t.Errorf("%v theme: Accent and Info are the identical color %v", th.Appearance, th.Accent)
+		}
+		const minSeparation = 35
+		if d := rgbDist(th.Accent.R, th.Accent.G, th.Accent.B, th.Info.R, th.Info.G, th.Info.B); d < minSeparation {
+			t.Errorf("%v theme: Accent %v vs Info %v separation = %.1f, want >= %v", th.Appearance, th.Accent, th.Info, d, minSeparation)
+		}
+		if as, is := nearestANSI16(th.Accent), nearestANSI16(th.Info); as == is {
+			t.Errorf("%v theme: Accent %v and Info %v both downsample to the same ANSI-16 color (slot %d) on a Color16 terminal", th.Appearance, th.Accent, th.Info, as)
 		}
 	}
 }

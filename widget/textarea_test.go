@@ -706,6 +706,108 @@ func TestTextAreaOnCursorChangeBatchesWithOnChangeCmd(t *testing.T) {
 	}
 }
 
+func TestTextAreaOnSelectionChangeFiresOnShiftMovement(t *testing.T) {
+	type sel struct {
+		start, end int
+		ok         bool
+	}
+	var got []sel
+	m := &widgetHostModel{node: TextArea(TextAreaOptions{
+		Theme: style.DefaultDark(),
+		Value: "abc",
+		OnSelectionChange: func(start, end int, ok bool) tui.Msg {
+			got = append(got, sel{start, end, ok})
+			return nil
+		},
+	})}
+	app := tui.NewApp(m, 14, 6)
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome})                       // no selection yet, no callback
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight, Mod: input.ModShift}) // selects "a"
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight, Mod: input.ModShift}) // extends to "ab"
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight})                      // drops the selection
+
+	want := []sel{{0, 1, true}, {0, 2, true}, {0, 0, false}}
+	if len(got) != len(want) {
+		t.Fatalf("selections = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("selections = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestTextAreaOnSelectionChangeFiresOnMouseDrag(t *testing.T) {
+	var start, end = -1, -1
+	var ok bool
+	m := &widgetHostModel{node: TextArea(TextAreaOptions{
+		Theme: style.DefaultDark(),
+		Value: "abc",
+		OnSelectionChange: func(s, e int, o bool) tui.Msg {
+			start, end, ok = s, e, o
+			return nil
+		},
+	})}
+	app := tui.NewApp(m, 14, 6)
+
+	app.HandleInput(input.MouseEvent{X: 1, Y: 1, Button: input.MouseLeft})             // press at offset 0
+	app.HandleInput(input.MouseEvent{X: 3, Y: 1, Button: input.MouseLeft, Drag: true}) // drag to offset 2
+
+	if !ok || start != 0 || end != 2 {
+		t.Fatalf("selection = (%d, %d, %v), want (0, 2, true)", start, end, ok)
+	}
+}
+
+func TestTextAreaOnSelectionChangeDoesNotFireWhenUnchanged(t *testing.T) {
+	calls := 0
+	m := &widgetHostModel{node: TextArea(TextAreaOptions{
+		Theme: style.DefaultDark(),
+		Value: "abc",
+		OnSelectionChange: func(start, end int, ok bool) tui.Msg {
+			calls++
+			return nil
+		},
+	})}
+	app := tui.NewApp(m, 14, 6)
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight}) // plain movement, never had a selection
+	app.HandleInput(input.KeyEvent{Rune: 'X'})           // edit, no selection involved
+
+	if calls != 0 {
+		t.Fatalf("OnSelectionChange fired %d times, want 0 (no selection was ever active)", calls)
+	}
+}
+
+func TestTextAreaOnSelectionChangeBatchesWithOnChangeCmd(t *testing.T) {
+	m := &widgetHostModel{node: TextArea(TextAreaOptions{
+		Theme:    style.DefaultDark(),
+		Value:    "abc",
+		OnChange: func(v string) tui.Msg { return "changed:" + v },
+		OnSelectionChange: func(start, end int, ok bool) tui.Msg {
+			return "selection"
+		},
+	})}
+	app := tui.NewApp(m, 14, 6)
+
+	app.HandleInput(input.KeyEvent{Key: input.KeyHome})
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight, Mod: input.ModShift}) // selects "a"
+
+	cmds := app.HandleInput(input.KeyEvent{Rune: 'X'}) // types over the selection: OnChange + OnSelectionChange (dropped)
+	if len(cmds) != 1 {
+		t.Fatalf("cmds = %v, want a single (batched) Cmd", cmds)
+	}
+	batch, ok := cmds[0]().(tui.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("cmds[0]() = %#v, want a 2-element tui.BatchMsg", cmds[0]())
+	}
+	got := []tui.Msg{batch[0](), batch[1]()}
+	want := []tui.Msg{"changed:Xbc", "selection"}
+	if got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("batch msgs = %v, want %v", got, want)
+	}
+}
+
 func equalInts(a, b []int) bool {
 	if len(a) != len(b) {
 		return false

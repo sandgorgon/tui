@@ -75,6 +75,17 @@ type TextAreaOptions struct {
 	// restoring it via InitialCursor after the field is later
 	// recreated) or drive a live "line N, col M" indicator.
 	OnCursorChange func(offset int) tui.Msg
+	// OnSelectionChange, if non-nil, is called with the active
+	// selection's ordered [start, end) rune-offset range and whether
+	// one is actually active — the same shape
+	// editBuffer.selectionRange() returns internally — whenever it
+	// changes: extending/shrinking via Shift+movement or a mouse drag,
+	// or being dropped by a plain movement or edit. ok is false (with
+	// start and end both 0) when there is no active selection. Lets a
+	// caller implement e.g. a clipboard-copy command or a "N
+	// characters selected" indicator without maintaining its own copy
+	// of the anchor/cursor state.
+	OnSelectionChange func(start, end int, ok bool) tui.Msg
 	// OnSubmit, if non-nil, is called with the field's content when
 	// Ctrl+Enter is pressed (plain Enter inserts a newline, unlike
 	// TextInput's Enter).
@@ -465,6 +476,7 @@ func (w *textAreaWidget) HandleEvent(e input.Event) tui.Cmd {
 	}
 
 	prevCursor := w.cursor
+	prevSelStart, prevSelEnd, prevHasSel := w.selectionRange()
 	changed := false
 	switch ev := e.(type) {
 	case input.KeyEvent:
@@ -487,6 +499,13 @@ func (w *textAreaWidget) HandleEvent(e input.Event) tui.Cmd {
 	if w.cursor != prevCursor && w.opts.OnCursorChange != nil {
 		if msg := w.opts.OnCursorChange(w.cursor); msg != nil {
 			cmds = append(cmds, func() tui.Msg { return msg })
+		}
+	}
+	if w.opts.OnSelectionChange != nil {
+		if selStart, selEnd, hasSel := w.selectionRange(); selStart != prevSelStart || selEnd != prevSelEnd || hasSel != prevHasSel {
+			if msg := w.opts.OnSelectionChange(selStart, selEnd, hasSel); msg != nil {
+				cmds = append(cmds, func() tui.Msg { return msg })
+			}
 		}
 	}
 	return tui.Batch(cmds...)

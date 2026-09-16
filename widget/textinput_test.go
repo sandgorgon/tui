@@ -364,6 +364,106 @@ func TestTextInputSelectionHighlightedInBuffer(t *testing.T) {
 	}
 }
 
+func TestTextInputOnSelectionChangeFiresOnShiftMovement(t *testing.T) {
+	type sel struct {
+		start, end int
+		ok         bool
+	}
+	var got []sel
+	app := textInputApp(t, TextInputOptions{
+		Theme: style.DefaultDark(),
+		OnSelectionChange: func(start, end int, ok bool) tui.Msg {
+			got = append(got, sel{start, end, ok})
+			return nil
+		},
+	})
+	for _, r := range "hello" {
+		app.HandleInput(input.KeyEvent{Rune: r})
+	}
+	// Cursor is at the end (5); Shift+Left x2 selects "o" then "lo".
+	app.HandleInput(input.KeyEvent{Key: input.KeyLeft, Mod: input.ModShift})
+	app.HandleInput(input.KeyEvent{Key: input.KeyLeft, Mod: input.ModShift})
+	app.HandleInput(input.KeyEvent{Key: input.KeyRight}) // drops the selection
+
+	want := []sel{{4, 5, true}, {3, 5, true}, {0, 0, false}}
+	if len(got) != len(want) {
+		t.Fatalf("selections = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("selections = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestTextInputOnSelectionChangeFiresOnMouseDrag(t *testing.T) {
+	var start, end = -1, -1
+	var ok bool
+	app := textInputApp(t, TextInputOptions{
+		Theme: style.DefaultDark(),
+		OnSelectionChange: func(s, e int, o bool) tui.Msg {
+			start, end, ok = s, e, o
+			return nil
+		},
+	})
+	for _, r := range "hello" {
+		app.HandleInput(input.KeyEvent{Rune: r})
+	}
+	app.HandleInput(input.MouseEvent{X: 1, Y: 1, Button: input.MouseLeft})             // press at offset 0
+	app.HandleInput(input.MouseEvent{X: 4, Y: 1, Button: input.MouseLeft, Drag: true}) // drag to offset 3
+
+	if !ok || start != 0 || end != 3 {
+		t.Fatalf("selection = (%d, %d, %v), want (0, 3, true)", start, end, ok)
+	}
+}
+
+func TestTextInputOnSelectionChangeDoesNotFireWhenUnchanged(t *testing.T) {
+	calls := 0
+	app := textInputApp(t, TextInputOptions{
+		Theme: style.DefaultDark(),
+		OnSelectionChange: func(start, end int, ok bool) tui.Msg {
+			calls++
+			return nil
+		},
+	})
+	for _, r := range "hello" {
+		app.HandleInput(input.KeyEvent{Rune: r})
+	}
+	app.HandleInput(input.KeyEvent{Key: input.KeyLeft}) // plain movement, never had a selection
+
+	if calls != 0 {
+		t.Fatalf("OnSelectionChange fired %d times, want 0 (no selection was ever active)", calls)
+	}
+}
+
+func TestTextInputOnSelectionChangeBatchesWithOnChangeCmd(t *testing.T) {
+	m := &widgetHostModel{node: TextInput(TextInputOptions{
+		Theme:    style.DefaultDark(),
+		OnChange: func(v string) tui.Msg { return "changed:" + v },
+		OnSelectionChange: func(start, end int, ok bool) tui.Msg {
+			return "selection"
+		},
+	})}
+	app := tui.NewApp(m, 12, 3)
+
+	app.HandleInput(input.KeyEvent{Rune: 'h'})
+	app.HandleInput(input.KeyEvent{Key: input.KeyLeft, Mod: input.ModShift}) // selects "h"
+
+	cmds := app.HandleInput(input.KeyEvent{Rune: 'X'}) // types over the selection: OnChange + OnSelectionChange (dropped)
+	if len(cmds) != 1 {
+		t.Fatalf("cmds = %v, want a single (batched) Cmd", cmds)
+	}
+	batch, ok := cmds[0]().(tui.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("cmds[0]() = %#v, want a 2-element tui.BatchMsg", cmds[0]())
+	}
+	got := []tui.Msg{batch[0](), batch[1]()}
+	want := []tui.Msg{"changed:X", "selection"}
+	if got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("batch msgs = %v, want %v", got, want)
+	}
+}
+
 func TestTextInputPasteInsertsAndStripsNewlines(t *testing.T) {
 	var value string
 	app := textInputApp(t, TextInputOptions{

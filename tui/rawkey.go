@@ -9,8 +9,9 @@ import "github.com/sandgorgon/tui/input"
 //
 // ReleaseKey names the key that, instead of being forwarded to the
 // widget, releases the claim and moves focus onward (like an
-// unclaimed Tab would have) — the guaranteed way out every such widget
-// must provide (trapping keyboard focus with no escape is a real
+// unclaimed Tab would have, and reporting a ReleaseMsg to Model.Update
+// so the application can steer focus elsewhere) — the guaranteed way
+// out every such widget must provide (trapping keyboard focus with no escape is a real
 // accessibility problem, not just an inconvenience — the same
 // rationale behind code editors like CodeMirror shipping a "tab moves
 // focus" toggle). It's configurable per widget instance rather than

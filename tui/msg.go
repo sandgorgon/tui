@@ -1,5 +1,7 @@
 package tui
 
+import "github.com/sandgorgon/tui/input"
+
 // Msg is anything fed into Model.Update: a decoded input.Event, the
 // result of a Cmd, or an application-defined type. There's no
 // interface to implement — any value can be a Msg, and Update
@@ -90,6 +92,25 @@ type ClipboardMsg struct{ Text string }
 // output, so there's nothing to interleave with.
 func CopyToClipboard(text string) Cmd {
 	return func() Msg { return ClipboardMsg{Text: text} }
+}
+
+// ReleaseMsg is delivered to Model.Update when the focused
+// RawKeyClaimer's ReleaseKey is pressed, in place of the raw KeyEvent
+// (which is consumed, never forwarded to the widget or to Update).
+// Focus has already moved onward by the time Update runs — the default
+// behavior, unchanged for a Model that ignores this Msg — so a Model
+// that wants the release to mean something else (e.g. a pane
+// multiplexer treating it as the start of its own navigation mode)
+// returns SetFocusCmd from Update to override where focus ended up.
+//
+// FromIndex is the focus index (see App.FocusIndex) of the widget that
+// was released, and FromKey its Node.Key (nil if it was unkeyed) —
+// captured before focus moved, since FocusAware's SetFocusedKey lags a
+// render behind and would already report the new target.
+type ReleaseMsg struct {
+	Key       input.KeyEvent
+	FromIndex int
+	FromKey   any
 }
 
 // FocusMsg, produced by SetFocusCmd, tells Run to move focus to Index

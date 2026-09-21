@@ -173,7 +173,8 @@ func (a *App) render() {
 // focused widget implements RawKeyClaimer and WantsRawTab, in which
 // case Tab goes straight to it instead (e.g. TextArea, so a literal
 // tab character can be typed) and only that widget's own declared
-// ReleaseKey moves focus onward. A MouseEvent landing inside a
+// ReleaseKey moves focus onward (and is reported to Model.Update as a
+// ReleaseMsg, which may override where focus lands). A MouseEvent landing inside a
 // tracked widget's bounds (see hitTest) moves focus there first
 // (click-to-focus) and is forwarded with its coordinates translated
 // to be local to that widget, so a widget never needs to know its own
@@ -233,8 +234,17 @@ func (a *App) handleInput(e input.Event) (dispatchCmd Cmd, widgetCmd Cmd, widget
 		claims, releaseKey := a.rawKeyClaim()
 		switch {
 		case claims && ke == releaseKey:
+			// The release key is consumed here — never forwarded to the
+			// claiming widget, and never dispatched to Update as a raw
+			// KeyEvent — but Update is told about it via ReleaseMsg, so
+			// an application can layer its own meaning on top of the
+			// default "focus moves onward" (see ReleaseMsg).
+			from := ReleaseMsg{Key: ke, FromIndex: a.focusIdx}
+			if a.focusIdx >= 0 && a.focusIdx < len(a.focusKeys) {
+				from.FromKey = a.focusKeys[a.focusIdx]
+			}
 			a.moveFocus(true)
-			return nil, nil, false
+			return a.Dispatch(Msg(from)), nil, false
 		case !claims && ke.Key == input.KeyTab:
 			a.moveFocus(ke.Mod&input.ModShift == 0)
 			return nil, nil, false

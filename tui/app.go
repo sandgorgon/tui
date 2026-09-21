@@ -87,6 +87,7 @@ func (a *App) Dispatch(msg Msg) Cmd {
 	model, cmd := a.model.Update(msg)
 	a.model = model
 	a.render()
+	a.applyFocusRequest()
 	pending := collectPendingMsgs(a.root)
 	if len(pending) == 0 {
 		return cmd
@@ -101,6 +102,17 @@ func (a *App) Dispatch(msg Msg) Cmd {
 		}
 	}
 	return Batch(cmds...)
+}
+
+// applyFocusRequest applies a FocusRequester Model's request from the
+// Update that just ran, synchronously — see FocusRequester for why this
+// exists alongside SetFocusCmd.
+func (a *App) applyFocusRequest() {
+	if fr, ok := a.model.(FocusRequester); ok {
+		if idx, ok := fr.RequestedFocus(); ok {
+			a.SetFocus(idx)
+		}
+	}
 }
 
 // Resize changes the frame buffer's size and repaints. A Box-based

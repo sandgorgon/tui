@@ -252,7 +252,12 @@ don't write any focus-traversal code yourself unless a widget needs to
 claim raw Tab (e.g. `TextArea` typing a literal tab character; see
 `tui.RawKeyClaimer`). Such a widget's release key is consumed and reaches
 `Update` as a `tui.ReleaseMsg` instead of a `KeyEvent`; focus moves onward
-by default, and `Update` may return `tui.SetFocusCmd` to send it elsewhere. Mouse clicks move focus too (click-to-focus),
+by default, and `Update` may return `tui.SetFocusCmd` to send it elsewhere. A
+`Model` that must not race with type-ahead (its keys mean different things on
+different widgets) can implement `tui.FocusRequester` instead: the request is
+applied synchronously, inside the same `Dispatch`, rather than through a `Cmd`.
+
+Mouse clicks move focus too (click-to-focus),
 with coordinates translated to be local to whichever widget was
 clicked, so a widget never needs to know its own absolute screen
 position.

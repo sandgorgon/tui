@@ -58,6 +58,28 @@ type FocusAware interface {
 	SetFocusedKey(key any)
 }
 
+// FocusRequester is an optional interface a Model can implement to move
+// keyboard focus as part of the Update that decided to, instead of
+// returning SetFocusCmd. A Cmd's Msg is applied later, through Run's
+// asynchronous channel, so input already waiting (a paste, type-ahead,
+// a key macro) can be read and routed before the focus change lands —
+// to whatever widget had focus a moment earlier. That is harmless for
+// most applications but wrong for one whose keys mean different things
+// on different widgets, such as a pane multiplexer where a letter is a
+// command on a title bar and text in a shell.
+//
+// After every Dispatch, once the new tree has been rendered (so the
+// index space is the one the new frame's focus order defines), App asks
+// the Model whether the Update that just ran requested focus, and if so
+// applies it immediately, exactly as SetFocus would: an out-of-range
+// index is ignored. The request belongs to that one Update — a Model
+// should report ok only for the Update that made it, and clear it at
+// the start of the next, or the stale request would refocus on every
+// later Dispatch.
+type FocusRequester interface {
+	RequestedFocus() (idx int, ok bool)
+}
+
 // QuitMsg, produced by Quit, tells the App to stop its Run loop.
 type QuitMsg struct{}
 

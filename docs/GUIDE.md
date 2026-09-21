@@ -250,7 +250,9 @@ concrete instance of getting this right.
 Tab/Shift-Tab move focus among focusable widgets automatically — you
 don't write any focus-traversal code yourself unless a widget needs to
 claim raw Tab (e.g. `TextArea` typing a literal tab character; see
-`tui.RawKeyClaimer`). Mouse clicks move focus too (click-to-focus),
+`tui.RawKeyClaimer`). Such a widget's release key is consumed and reaches
+`Update` as a `tui.ReleaseMsg` instead of a `KeyEvent`; focus moves onward
+by default, and `Update` may return `tui.SetFocusCmd` to send it elsewhere. Mouse clicks move focus too (click-to-focus),
 with coordinates translated to be local to whichever widget was
 clicked, so a widget never needs to know its own absolute screen
 position.

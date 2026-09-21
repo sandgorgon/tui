@@ -70,3 +70,84 @@ func TestAppTabStillNavigatesWhenNotClaimed(t *testing.T) {
 		t.Errorf("focusIdx = %d, want 1 (ordinary Tab navigation)", app.focusIdx)
 	}
 }
+
+// releaseModel records every Msg Update sees and, if onRelease is set,
+// answers a ReleaseMsg with that Cmd.
+type releaseModel struct {
+	node      Node
+	msgs      []Msg
+	onRelease Cmd
+}
+
+func (m *releaseModel) Init() Cmd { return nil }
+func (m *releaseModel) Update(msg Msg) (Model, Cmd) {
+	m.msgs = append(m.msgs, msg)
+	if _, ok := msg.(ReleaseMsg); ok {
+		return m, m.onRelease
+	}
+	return m, nil
+}
+func (m *releaseModel) View() Node { return m.node }
+
+func newReleaseApp(release input.KeyEvent, onRelease Cmd) (*App, *releaseModel, *rawKeyWidget, *fakeWidget) {
+	claimer := &rawKeyWidget{fakeWidget: fakeWidget{focusable: true}, release: release}
+	other := &fakeWidget{focusable: true}
+	m := &releaseModel{onRelease: onRelease, node: Box(layout.Vertical,
+		Child(layout.Fill(1), Component("claimer", nil, func() Widget { return claimer }).Key("c")),
+		Child(layout.Fill(1), Component("other", nil, func() Widget { return other })),
+	)}
+	return NewApp(m, 10, 5), m, claimer, other
+}
+
+func TestAppReleaseKeyIsReportedToUpdateAsReleaseMsg(t *testing.T) {
+	rel := input.KeyEvent{Rune: '\\', Mod: input.ModCtrl}
+	app, m, claimer, other := newReleaseApp(rel, nil)
+
+	app.HandleInput(rel)
+
+	var got []ReleaseMsg
+	for _, msg := range m.msgs {
+		switch v := msg.(type) {
+		case ReleaseMsg:
+			got = append(got, v)
+		case input.KeyEvent:
+			t.Errorf("the release key must not reach Update as a raw KeyEvent, got %v", v)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("Update saw %d ReleaseMsg, want 1 (msgs=%v)", len(got), m.msgs)
+	}
+	if got[0].Key != rel || got[0].FromIndex != 0 || got[0].FromKey != "c" {
+		t.Errorf("ReleaseMsg = %+v, want Key=%v FromIndex=0 FromKey=\"c\"", got[0], rel)
+	}
+	if len(claimer.events) != 0 {
+		t.Errorf("release key must not be forwarded to the widget, got %v", claimer.events)
+	}
+	// The default is unchanged: with no override, focus moves onward.
+	if app.focusIdx != 1 || !other.focused {
+		t.Errorf("focusIdx = %d, other.focused = %v, want focus moved onward to 1", app.focusIdx, other.focused)
+	}
+}
+
+func TestAppReleaseMsgCanOverrideWhereFocusLands(t *testing.T) {
+	rel := input.KeyEvent{Rune: '\\', Mod: input.ModCtrl}
+	app, _, _, _ := newReleaseApp(rel, SetFocusCmd(0))
+
+	cmds := app.HandleInput(rel)
+
+	var focus []FocusMsg
+	for _, c := range cmds {
+		if c == nil {
+			continue
+		}
+		if fm, ok := c().(FocusMsg); ok {
+			focus = append(focus, fm)
+		}
+	}
+	if len(focus) != 1 || focus[0].Index != 0 {
+		t.Fatalf("HandleInput returned focus msgs %v, want exactly FocusMsg{Index: 0} from Update", focus)
+	}
+	if !app.SetFocus(focus[0].Index) || app.focusIdx != 0 {
+		t.Errorf("applying the override left focusIdx = %d, want 0", app.focusIdx)
+	}
+}

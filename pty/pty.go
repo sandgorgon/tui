@@ -2,12 +2,30 @@ package pty
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
 
 	"github.com/sandgorgon/tui/term"
 )
+
+// Stream is what widget.Terminal (and any other consumer wanting the
+// same "drive a live vt.Screen from a byte stream" behavior) actually
+// needs from a pty-like connection: byte I/O, resize, and close. *Pty
+// satisfies it directly — Terminal's own local-Command case builds one
+// via Start below exactly as before. A caller with something other
+// than a locally-spawned child to drive — a remote connection's own
+// stdin/stdout, say — can satisfy Stream with its own type instead,
+// without this package's openpty/Start machinery being involved at
+// all: Stream is deliberately just an interface, not tied to anything
+// concrete here.
+type Stream interface {
+	io.Reader
+	io.Writer
+	io.Closer
+	Resize(term.Size) error
+}
 
 // Pty is a pseudo-terminal pair. It embeds the master end (*os.File),
 // so callers use it directly as an io.Reader/io.Writer (e.g.
@@ -95,3 +113,5 @@ func (p *Pty) Signal(sig syscall.Signal) error {
 func (p *Pty) Close() error {
 	return p.File.Close()
 }
+
+var _ Stream = (*Pty)(nil)

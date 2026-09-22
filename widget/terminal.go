@@ -1,7 +1,9 @@
 package widget
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"sync"
 
@@ -23,8 +25,18 @@ type TerminalOptions struct {
 	// Command starts a fresh pty-attached child the first time this
 	// Node mounts — read once, like TextInput's Value: a Terminal owns
 	// its child process for its whole retained lifetime, not something
-	// restarted or resynced from props on every frame.
+	// restarted or resynced from props on every frame. Exactly one of
+	// Command or Stream should be set.
 	Command *exec.Cmd
+
+	// Stream is Command's alternative: an already-live pty.Stream (see
+	// its own doc comment) to drive Terminal from directly, instead of
+	// spawning a local child via pty.Start — e.g. a remote connection's
+	// own stdin/stdout, adapted to Stream by the caller. Like Command,
+	// read once on first mount. There is no child process in this case
+	// (OnExit still fires, on a clean or errored end of the stream, just
+	// without a real exit code behind it — see readLoop's own doc note).
+	Stream pty.Stream
 
 	// OnExit, if non-nil, is called after the child process exits
 	// (err is nil on a clean exit), and its Msg is delivered on
@@ -126,8 +138,8 @@ type terminalWidget struct {
 	opts    TerminalOptions
 	mounted bool
 
-	pty *pty.Pty
-	cmd *exec.Cmd
+	stream pty.Stream
+	cmd    *exec.Cmd // nil when opts.Stream was used instead of opts.Command — see readLoop
 
 	mu           sync.Mutex
 	parser       *vt.Parser
@@ -150,30 +162,34 @@ func (w *terminalWidget) Reconcile(props any) bool {
 	return true
 }
 
-// start spawns Command at cols x rows and begins reading its output.
-// It's called from the first Paint, not Reconcile, deliberately: Paint
-// is the first point a real size is known. Starting the pty (and its
-// vt.Screen) at that size directly, rather than at some placeholder
-// size resized later, matters because there's no way to guarantee
-// Paint runs before the child's first output arrives — a vt.Screen
-// created too small (e.g. 1x1) can lose content to scrolling before a
-// later Resize ever gets a chance to preserve it, since Resize only
-// copies over the overlapping region of the old and new buffers (see
-// vt.Screen.Resize).
+// start spawns Command (or adopts Stream) at cols x rows and begins
+// reading its output. It's called from the first Paint, not Reconcile,
+// deliberately: Paint is the first point a real size is known. Starting
+// the pty (and its vt.Screen) at that size directly, rather than at
+// some placeholder size resized later, matters because there's no way
+// to guarantee Paint runs before the child's first output arrives — a
+// vt.Screen created too small (e.g. 1x1) can lose content to scrolling
+// before a later Resize ever gets a chance to preserve it, since Resize
+// only copies over the overlapping region of the old and new buffers
+// (see vt.Screen.Resize).
 func (w *terminalWidget) start(cols, rows int) {
-	if w.opts.Command == nil {
+	switch {
+	case w.opts.Stream != nil:
+		w.stream = w.opts.Stream
+	case w.opts.Command != nil:
+		w.cmd = w.opts.Command
+		p, err := pty.Start(w.cmd)
+		if err != nil {
+			w.mu.Lock()
+			w.exited, w.exitErr = true, err
+			w.mu.Unlock()
+			return
+		}
+		w.stream = p
+	default:
 		return
 	}
-	w.cmd = w.opts.Command
-	p, err := pty.Start(w.cmd)
-	if err != nil {
-		w.mu.Lock()
-		w.exited, w.exitErr = true, err
-		w.mu.Unlock()
-		return
-	}
-	_ = p.Resize(term.Size{Cols: cols, Rows: rows})
-	w.pty = p
+	_ = w.stream.Resize(term.Size{Cols: cols, Rows: rows})
 	w.parser = vt.NewParser()
 	w.screen = vt.NewScreen(cols, rows)
 	w.lastCols, w.lastRows = cols, rows
@@ -183,7 +199,7 @@ func (w *terminalWidget) start(cols, rows int) {
 func (w *terminalWidget) readLoop() {
 	buf := make([]byte, 4096)
 	for {
-		n, err := w.pty.Read(buf)
+		n, err := w.stream.Read(buf)
 		if n > 0 {
 			w.mu.Lock()
 			w.parser.Feed(buf[:n], w.screen)
@@ -195,13 +211,23 @@ func (w *terminalWidget) readLoop() {
 			resp := w.screen.TakeResponses()
 			w.mu.Unlock()
 			if len(resp) > 0 {
-				_, _ = w.pty.Write(resp)
+				_, _ = w.stream.Write(resp)
 			}
 		}
 		if err != nil {
-			waitErr := w.cmd.Wait()
+			// w.cmd is nil when opts.Stream was used instead of
+			// opts.Command — there's no local child to Wait() on, so the
+			// stream's own read error stands in for it directly, with a
+			// clean io.EOF (the stream ending normally) reported as nil,
+			// matching cmd.Wait()'s own "nil on a clean exit" contract.
+			exitErr := err
+			if w.cmd != nil {
+				exitErr = w.cmd.Wait()
+			} else if errors.Is(err, io.EOF) {
+				exitErr = nil
+			}
 			w.mu.Lock()
-			w.exited, w.exitErr = true, waitErr
+			w.exited, w.exitErr = true, exitErr
 			w.mu.Unlock()
 			return
 		}
@@ -231,8 +257,8 @@ func (w *terminalWidget) Paint(p *cell.Painter) {
 
 	if width != w.lastCols || height != w.lastRows {
 		w.screen.Resize(width, height)
-		if w.pty != nil {
-			_ = w.pty.Resize(term.Size{Cols: width, Rows: height})
+		if w.stream != nil {
+			_ = w.stream.Resize(term.Size{Cols: width, Rows: height})
 		}
 		w.lastCols, w.lastRows = width, height
 	}
@@ -341,7 +367,7 @@ func (w *terminalWidget) TakePendingMsg() tui.Msg {
 
 func (w *terminalWidget) HandleEvent(e input.Event) tui.Cmd {
 	w.mu.Lock()
-	if w.exited || w.pty == nil {
+	if w.exited || w.stream == nil {
 		w.mu.Unlock()
 		return nil
 	}
@@ -392,7 +418,7 @@ func (w *terminalWidget) HandleEvent(e input.Event) tui.Cmd {
 	w.mu.Unlock()
 
 	if b := encodeEvent(e, appCursorKeys); len(b) > 0 {
-		_, _ = w.pty.Write(b)
+		_, _ = w.stream.Write(b)
 	}
 	return nil
 }
@@ -412,14 +438,19 @@ func (w *terminalWidget) ReleaseKey() input.KeyEvent {
 	return input.KeyEvent{Rune: '\\', Mod: input.ModCtrl}
 }
 
-// Close closes the pty master, which reliably delivers SIGHUP to the
-// child (standard pty semantics) so the readLoop's own cmd.Wait()
-// reaps it — the same "closing the master is enough" empirical finding
-// from M3's pty package tests, not something Terminal needs to
-// duplicate by also signaling the process itself.
+// Close closes the underlying stream. For a local Command, that's the
+// pty master, which reliably delivers SIGHUP to the child (standard pty
+// semantics) so the readLoop's own cmd.Wait() reaps it — the same
+// "closing the master is enough" empirical finding from M3's pty
+// package tests, not something Terminal needs to duplicate by also
+// signaling the process itself. For an opts.Stream, this is exactly
+// whatever that Stream's own Close does — Terminal has no process to
+// signal in that case at all, only the caller-supplied stream knows
+// what "close" should mean for it (e.g. releasing a remote connection's
+// own resources without necessarily ending anything on the other end).
 func (w *terminalWidget) Close() error {
-	if w.pty == nil {
+	if w.stream == nil {
 		return nil
 	}
-	return w.pty.Close()
+	return w.stream.Close()
 }

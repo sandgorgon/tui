@@ -257,7 +257,12 @@ widget: PTY output bytes feed `vt.Parser`, which mutates a `vt.Screen`; the
 widget's `Paint()` blits that screen's cells straight into the `Painter`'s
 rect; its `HandleEvent()` does the reverse — encodes key/mouse `input.Event`s
 back into bytes written to the PTY master. This is what makes a real shell,
-editor, or pager runnable inside a pane.
+editor, or pager runnable inside a pane. `TerminalOptions` takes either
+`Command` (spawn a local child via `pty.Start`, the original path) or
+`Stream` (drive from an already-live `pty.Stream` — `Read`/`Write`/`Close`/
+`Resize`, which `*pty.Pty` itself satisfies) — a host can hand it any live
+connection this way, e.g. a remote job's own stdin/stdout, with no local
+PTY involved at all.
 
 ---
 
@@ -285,6 +290,12 @@ Capabilities:
   the kernel's normal `^C`/`^Z` line-discipline handling for the child
   doesn't kick in the way it would in cooked mode; this has to be done by
   hand and is flagged as a specific risk area in §9.
+- `Stream` interface (`Read`/`Write`/`Close`/`Resize`) — the minimal shape
+  `widget.Terminal` actually needs from a live connection; `*Pty` satisfies
+  it, so `Terminal`'s original `Command`-driven path is just its `Start`
+  case. A non-local connection (e.g. a remote job's own stdin/stdout) can
+  satisfy `Stream` with its own type instead, without this package's
+  `openpty`/`Start` machinery involved at all.
 - `io.Reader`/`io.Writer` on the master fd, `Close()` with full cleanup,
   exit-status propagation.
 

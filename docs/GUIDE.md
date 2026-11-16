@@ -268,6 +268,13 @@ jump to the start/end of the buffer, and `PageUp`/`PageDown` move by
 one screenful of lines. All of them extend the active selection when
 held with `Shift`, the same as the plain arrow keys already do.
 
+Long lines scroll horizontally by default. Set `TextAreaOptions.SoftWrap`
+to word-wrap them across screen rows instead (it can be flipped between
+frames, e.g. from a toggle key). Wrapping is display-only — the buffer
+and every offset are unchanged — so `Up`/`Down`/`PageUp`/`PageDown` move
+by screen row while `Home`/`End` still go to the start/end of the whole
+line, and a `Gutter` shows its text on a line's first row only.
+
 ## 8. Styling: cell.Style directly, or style.Theme
 
 Every visible thing — `tui.Text`, a widget's rows, borders — is

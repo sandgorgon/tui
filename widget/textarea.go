@@ -107,6 +107,23 @@ type TextAreaOptions struct {
 	// preserving the bordered behavior every existing caller already
 	// gets.
 	Frameless bool
+
+	// SoftWrap, when true, word-wraps each line that's wider than the
+	// text area across as many screen rows as it needs, instead of
+	// scrolling it horizontally (the default). Display only: the
+	// buffer, OnChange's value, and every offset (InitialCursor,
+	// OnCursorChange, Highlights) are unchanged. Lines break after a
+	// space or tab; a word wider than the whole row is broken mid-word.
+	// The rightmost column is kept free for the end-of-line cursor (and
+	// for one trailing space that doesn't fit, which "hangs" there
+	// rather than starting the next row). Up/Down and PageUp/PageDown
+	// move by screen row, keeping the cursor's column; Home/End still
+	// go to the start/end of the whole line, not the screen row. Gutter
+	// is asked about each line once, for the line's first row; its
+	// continuation rows get a blank gutter in that line's style. Can be
+	// toggled between frames — the scroll position re-clamps to keep
+	// the cursor visible.
+	SoftWrap bool
 }
 
 // TextArea is a multi-line, focusable, bordered (optionally frameless
@@ -114,12 +131,13 @@ type TextAreaOptions struct {
 // TextInput's uncontrolled-after-mount design and
 // editBuffer machinery (see TextInput's doc comment) — Value is read
 // once, at mount, as the field's initial content; the application
-// learns what's in it via OnChange and OnSubmit (Ctrl+Enter). Long
-// lines scroll horizontally rather than soft-wrapping, so cursor
-// movement always corresponds to what's on screen one-for-one; there's
-// no line virtualization for very long documents (compare List's
-// visible-window-only rendering) since a multi-line *editor*, unlike a
-// read-only List, needs cursor math to stay simple and exact.
+// learns what's in it via OnChange and OnSubmit (Ctrl+Enter). By
+// default long lines scroll horizontally, so each screen row is
+// exactly one buffer line; TextAreaOptions.SoftWrap word-wraps them
+// instead. There's no line virtualization for very long documents
+// (compare List's visible-window-only rendering) since a multi-line
+// *editor*, unlike a read-only List, needs cursor math to stay simple
+// and exact.
 func TextArea(opts TextAreaOptions) tui.Node {
 	return tui.Component(nil, opts, func() tui.Widget {
 		return &textAreaWidget{}
@@ -140,6 +158,15 @@ type textAreaWidget struct {
 	// painter's Size() and otherwise never retained. Zero before the
 	// first Paint; handleKey falls back to moving by 1 line in that case.
 	lastVisibleLines int
+
+	// lastTextW/lastGutterW are the text column count and gutter width
+	// from the most recent Paint, for the same reason as
+	// lastVisibleLines: key and mouse handling run outside Paint but
+	// need them — soft-wrapped rows depend on the text width, and a
+	// click's column has to skip the gutter. Zero before the first
+	// Paint; soft-wrapped movement then falls back to moving by buffer
+	// line.
+	lastTextW, lastGutterW int
 
 	// dragging is true between a MouseLeft press and its matching
 	// release — see handleMouse.
@@ -245,6 +272,116 @@ func lineIndexOf(lines []textLine, pos int) int {
 	return len(lines) - 1
 }
 
+// visualRow is one screen row of a soft-wrapped TextArea: the [start,
+// end) slice of buffer line `line` it shows, and whether it's that
+// line's final row (the only row that can show the cursor at the
+// line's end — on any other row, its end offset is the next row's
+// start and the cursor there is drawn on the next row).
+type visualRow struct {
+	seg  textLine
+	line int
+	last bool
+}
+
+// isWrapSpace reports whether a soft wrap may break right after r.
+func isWrapSpace(r rune) bool { return r == ' ' || r == '\t' }
+
+// wrapLine splits ln into the segments soft wrap shows on successive
+// rows of width columns. Content fills at most width-1 columns, leaving
+// the last one for the end-of-line cursor or one hanging trailing
+// space (see TextAreaOptions.SoftWrap) — except at width 1, where
+// there's no column to spare. A segment ends after the last space or
+// tab that fits; a run with no such break (one long word) is broken
+// where it overflows, always taking at least one rune so wrapping
+// progresses even when a single wide rune is wider than the row. If
+// the final segment still fills the whole row (only possible at those
+// degenerate widths), an empty segment follows it so the end-of-line
+// cursor has somewhere to go.
+func wrapLine(buf []rune, ln textLine, width int) []textLine {
+	limit := width - 1
+	if limit < 1 {
+		limit = width
+	}
+	var segs []textLine
+	start, col, brk := ln.start, 0, -1
+	for i := ln.start; i < ln.end; {
+		r := buf[i]
+		rw := runeCols(r)
+		switch {
+		case col+rw <= limit:
+			col += rw
+			i++
+			if isWrapSpace(r) {
+				brk = i
+			}
+		case isWrapSpace(r) && col+rw <= width:
+			i++ // hang it in the reserved last column, then break
+			segs = append(segs, textLine{start, i})
+			start, col, brk = i, 0, -1
+		default:
+			end := i
+			switch {
+			case brk > start:
+				end = brk
+			case i == start:
+				end = i + 1
+			}
+			segs = append(segs, textLine{start, end})
+			start, col, brk = end, 0, -1
+			i = end
+		}
+	}
+	segs = append(segs, textLine{start, ln.end})
+	if start < ln.end && visualWidth(buf, start, ln.end) >= width {
+		segs = append(segs, textLine{ln.end, ln.end})
+	}
+	return segs
+}
+
+// wrapRows soft-wraps every line of buf to width columns.
+func wrapRows(buf []rune, lines []textLine, width int) []visualRow {
+	rows := make([]visualRow, 0, len(lines))
+	for li, ln := range lines {
+		segs := wrapLine(buf, ln, width)
+		for si, seg := range segs {
+			rows = append(rows, visualRow{seg: seg, line: li, last: si == len(segs)-1})
+		}
+	}
+	return rows
+}
+
+// rowIndexOf returns the index of the row showing buffer offset pos:
+// the last row starting at or before it, so an offset on a wrap
+// boundary belongs to the row it starts, not the one it ends.
+func rowIndexOf(rows []visualRow, pos int) int {
+	i := sort.Search(len(rows), func(i int) bool { return rows[i].seg.start > pos })
+	return max(i-1, 0)
+}
+
+// rowColumnToIndex is columnToIndex for one soft-wrapped row: past the
+// row's content it clamps to the row's last rune rather than its end
+// offset, unless this is the line's last row — that end offset is the
+// next row's start, so landing on it would put the cursor on the wrong
+// row.
+func rowColumnToIndex(buf []rune, row visualRow, col int) int {
+	idx := columnToIndex(buf, row.seg.start, row.seg.end, col)
+	if !row.last && idx == row.seg.end && idx > row.seg.start {
+		idx--
+	}
+	return idx
+}
+
+// softWrapRows returns the soft-wrapped rows for key/mouse handling,
+// at the most recent Paint's text width — or ok=false when soft wrap
+// is off or nothing has been painted yet, meaning: move by buffer
+// line.
+func (w *textAreaWidget) softWrapRows() (rows []visualRow, ok bool) {
+	if !w.opts.SoftWrap || w.lastTextW <= 0 {
+		return nil, false
+	}
+	return wrapRows(w.buf, splitLines(w.buf), w.lastTextW), true
+}
+
 // gutterTextWidth returns s's on-screen column width, matching
 // visualWidth's wide-rune handling.
 func gutterTextWidth(s string) int {
@@ -293,6 +430,13 @@ func gutterWidth(gutter func(int) (string, cell.Style), lineCount, scrollRow, in
 // through the padding/separator cells.
 func paintGutterRow(p *cell.Painter, gutter func(int) (string, cell.Style), lineIdx, row, gutterW int) {
 	text, style := gutter(lineIdx)
+	paintGutterCells(p, text, style, row, gutterW)
+}
+
+// paintGutterCells is paintGutterRow's painting half, taking the text
+// and style directly — soft wrap paints a continuation row's gutter as
+// blank text in its line's style.
+func paintGutterCells(p *cell.Painter, text string, style cell.Style, row, gutterW int) {
 	textW := gutterTextWidth(text)
 	col := 0
 	for ; col < gutterW-1-textW; col++ {
@@ -339,6 +483,7 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 		} else {
 			gutterW = 0
 		}
+		w.lastTextW, w.lastGutterW = innerW-gutterW, gutterW
 		if w.opts.Placeholder != "" {
 			inner.Text(gutterW, 0, w.opts.Placeholder, w.opts.Theme.MutedText())
 		}
@@ -349,6 +494,10 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 	}
 
 	lines := splitLines(w.buf)
+	if w.opts.SoftWrap {
+		w.paintWrapped(inner, innerW, innerH, lines)
+		return
+	}
 	cursorLine := lineIndexOf(lines, w.cursor)
 	cursorCol := visualWidth(w.buf, lines[cursorLine].start, w.cursor)
 
@@ -359,6 +508,7 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 	if textW < 1 {
 		gutterW, textW = 0, innerW
 	}
+	w.lastTextW, w.lastGutterW = textW, gutterW
 
 	switch {
 	case cursorCol < w.scrollCol:
@@ -370,9 +520,6 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 		w.scrollCol = 0
 	}
 
-	defaultStyle := w.opts.Theme.Text()
-	spans := w.opts.Highlights
-	selStart, selEnd, hasSel := w.selectionRange()
 	for row := range innerH {
 		lineIdx := w.scrollRow + row
 		if lineIdx >= len(lines) {
@@ -381,85 +528,142 @@ func (w *textAreaWidget) Paint(p *cell.Painter) {
 		if gutterW > 0 {
 			paintGutterRow(inner, w.opts.Gutter, lineIdx, row, gutterW)
 		}
-		ln := lines[lineIdx]
-		// A line entirely swept by the selection (selection starts at
-		// or before it and continues past its end into a later line)
-		// highlights its whole row width, padding included, so a
-		// multi-line selection reads as one continuous highlighted
-		// block rather than stopping dead at each line's actual text.
-		// A line the selection only starts or ends *within* only
-		// highlights its real characters — extending that highlight
-		// into the padding too would require re-deriving "how far
-		// into a later line does the selection reach" from this row's
-		// unrelated trailing columns, which don't correspond to real
-		// buffer positions the way idx does for idx < ln.end.
-		lineFullySelected := hasSel && selStart <= ln.start && selEnd > ln.end
+		w.paintSegment(inner, row, gutterW, textW, lines[lineIdx], w.scrollCol, true)
+	}
+}
 
-		// idx starts at the first buffer rune at or past the scrolled-
-		// past region rather than jumping there by arithmetic (ln.start
-		// + w.scrollCol, valid only when every rune is one column wide):
-		// a wide rune earlier in the line shifts a buffer index's screen
-		// column away from its rune-count offset, so finding where
-		// scrollCol lands means walking runes and summing width. If
-		// scrollCol splits a wide rune (lands mid-glyph), that rune is
-		// skipped entirely — col then overshoots w.scrollCol by the
-		// glyph's leftover column(s), which the loop below renders
-		// blank rather than drawing half a glyph.
-		idx, col := ln.start, 0
-		for idx < ln.end && col < w.scrollCol {
-			col += runeCols(w.buf[idx])
-			idx++
+// paintWrapped is Paint for TextAreaOptions.SoftWrap: the same per-row
+// painting as the horizontally scrolling layout, but over soft-wrapped
+// rows (see wrapRows) with no horizontal scroll, and scrollRow counting
+// screen rows rather than buffer lines.
+//
+// The text width the rows wrap to depends on the gutter's width, which
+// unwrapped Paint sizes from the lines on screen — but which lines are
+// on screen depends on the wrap. To break that cycle, the gutter is
+// sized from every line that *could* be on screen: the cursor's row is
+// always visible and every line takes at least one row, so no visible
+// line is more than innerH lines from the cursor's. That can only make
+// the gutter wider than strictly needed (e.g. one digit early, just
+// before line 100 scrolls into view), never too narrow.
+func (w *textAreaWidget) paintWrapped(inner *cell.Painter, innerW, innerH int, lines []textLine) {
+	cursorLine := lineIndexOf(lines, w.cursor)
+	from := max(0, cursorLine-innerH)
+	gutterW := gutterWidth(w.opts.Gutter, len(lines), from, cursorLine-from+innerH+1)
+	textW := innerW - gutterW
+	if textW < 1 {
+		gutterW, textW = 0, innerW
+	}
+	w.lastTextW, w.lastGutterW = textW, gutterW
+	w.scrollCol = 0
+
+	rows := wrapRows(w.buf, lines, textW)
+	w.scrollRow = clampScroll(w.scrollRow, rowIndexOf(rows, w.cursor), len(rows), innerH)
+
+	for row := range innerH {
+		ri := w.scrollRow + row
+		if ri >= len(rows) {
+			break
+		}
+		vr := rows[ri]
+		if gutterW > 0 {
+			text, style := w.opts.Gutter(vr.line)
+			if ri > 0 && rows[ri-1].line == vr.line {
+				text = "" // continuation row: blank, in the line's own style
+			}
+			paintGutterCells(inner, text, style, row, gutterW)
+		}
+		w.paintSegment(inner, row, gutterW, textW, vr.seg, 0, vr.last)
+	}
+}
+
+// paintSegment paints buffer range seg onto screen row row, in the
+// textW columns right of the gutter, skipping its first skipCols
+// columns (horizontal scroll). cursorAtEnd says whether the cursor may
+// be drawn at seg.end — true for a whole line or a line's last wrapped
+// row, false for an earlier wrapped row, whose end offset is drawn as
+// the next row's start.
+func (w *textAreaWidget) paintSegment(inner *cell.Painter, row, gutterW, textW int, seg textLine, skipCols int, cursorAtEnd bool) {
+	defaultStyle := w.opts.Theme.Text()
+	spans := w.opts.Highlights
+	selStart, selEnd, hasSel := w.selectionRange()
+	// A segment entirely swept by the selection (selection starts
+	// at or before it and continues past its end into a later row)
+	// highlights its whole row width, padding included, so a
+	// multi-line selection reads as one continuous highlighted
+	// block rather than stopping dead at each row's actual text.
+	// A segment the selection only starts or ends *within* only
+	// highlights its real characters — extending that highlight
+	// into the padding too would require re-deriving "how far
+	// into a later row does the selection reach" from this row's
+	// unrelated trailing columns, which don't correspond to real
+	// buffer positions the way idx does for idx < seg.end.
+	lineFullySelected := hasSel && selStart <= seg.start && selEnd > seg.end
+
+	// idx starts at the first buffer rune at or past the scrolled-
+	// past region rather than jumping there by arithmetic (seg.start
+	// + skipCols, valid only when every rune is one column wide):
+	// a wide rune earlier in the line shifts a buffer index's screen
+	// column away from its rune-count offset, so finding where
+	// skipCols lands means walking runes and summing width. If
+	// skipCols splits a wide rune (lands mid-glyph), that rune is
+	// skipped entirely — col then overshoots skipCols by the
+	// glyph's leftover column(s), which the loop below renders
+	// blank rather than drawing half a glyph.
+	idx, col := seg.start, 0
+	for idx < seg.end && col < skipCols {
+		col += runeCols(w.buf[idx])
+		idx++
+	}
+
+	// The span cursor is re-seeked once per row via binary search
+	// rather than carried forward across rows, since idx jumps
+	// around non-monotonically row-to-row (a short line following a
+	// long one, with scrollCol fixed from the long line, can start
+	// well before the previous row's last idx) — but still sweeps
+	// forward (not per-cell binary search) within the row, since idx
+	// is monotonic there.
+	spanIdx := sort.Search(len(spans), func(i int) bool { return spans[i].End > idx })
+	for screenCol := 0; screenCol < textW; {
+		if gap := col - skipCols; gap > screenCol {
+			style := highlightStyle(defaultStyle, w.focused, lineFullySelected, false)
+			inner.SetCell(gutterW+screenCol, row, ' ', style)
+			screenCol++
+			continue
 		}
 
-		// The span cursor is re-seeked once per row via binary search
-		// rather than carried forward across rows, since idx jumps
-		// around non-monotonically row-to-row (a short line following a
-		// long one, with scrollCol fixed from the long line, can start
-		// well before the previous row's last idx) — but still sweeps
-		// forward (not per-cell binary search) within the row, since idx
-		// is monotonic there.
-		spanIdx := sort.Search(len(spans), func(i int) bool { return spans[i].End > idx })
-		for screenCol := 0; screenCol < textW; {
-			if gap := col - w.scrollCol; gap > screenCol {
-				style := highlightStyle(defaultStyle, w.focused, lineFullySelected, false)
-				inner.SetCell(gutterW+screenCol, row, ' ', style)
-				screenCol++
-				continue
-			}
-
-			atEnd := idx >= ln.end
-			r := rune(' ')
-			width := 1
-			if !atEnd {
-				r = w.buf[idx]
-				width = runeCols(r)
-			}
-			if screenCol+width > textW {
-				// A wide rune that would only half-fit at the row's
-				// right edge: cell.Painter.SetCell won't draw it at all
-				// (see its own doc comment), but this column still needs
-				// *some* explicit content this frame, or a stale cell
-				// from a previous frame survives undrawn.
-				style := highlightStyle(defaultStyle, w.focused, lineFullySelected, false)
-				inner.SetCell(gutterW+screenCol, row, ' ', style)
-				screenCol++
-				continue
-			}
-			for spanIdx < len(spans) && idx >= spans[spanIdx].End {
-				spanIdx++
-			}
-			base := defaultStyle
-			if !atEnd && spanIdx < len(spans) && idx >= spans[spanIdx].Start && idx < spans[spanIdx].End {
-				base = spans[spanIdx].Style
-			}
-			inSel := lineFullySelected || (hasSel && !atEnd && idx >= selStart && idx < selEnd)
-			style := highlightStyle(base, w.focused, inSel, idx == w.cursor && idx <= ln.end)
-			inner.SetCell(gutterW+screenCol, row, r, style)
-
-			screenCol += width
-			col += width
-			idx++
+		atEnd := idx >= seg.end
+		r := rune(' ')
+		width := 1
+		if !atEnd {
+			r = w.buf[idx]
+			width = runeCols(r)
 		}
+		if screenCol+width > textW {
+			// A wide rune that would only half-fit at the row's
+			// right edge: cell.Painter.SetCell won't draw it at all
+			// (see its own doc comment), but this column still needs
+			// *some* explicit content this frame, or a stale cell
+			// from a previous frame survives undrawn.
+			style := highlightStyle(defaultStyle, w.focused, lineFullySelected, false)
+			inner.SetCell(gutterW+screenCol, row, ' ', style)
+			screenCol++
+			continue
+		}
+		for spanIdx < len(spans) && idx >= spans[spanIdx].End {
+			spanIdx++
+		}
+		base := defaultStyle
+		if !atEnd && spanIdx < len(spans) && idx >= spans[spanIdx].Start && idx < spans[spanIdx].End {
+			base = spans[spanIdx].Style
+		}
+		inSel := lineFullySelected || (hasSel && !atEnd && idx >= selStart && idx < selEnd)
+		isCursor := idx == w.cursor && (idx < seg.end || (idx == seg.end && cursorAtEnd))
+		style := highlightStyle(base, w.focused, inSel, isCursor)
+		inner.SetCell(gutterW+screenCol, row, r, style)
+
+		screenCol += width
+		col += width
+		idx++
 	}
 }
 
@@ -590,8 +794,13 @@ func (w *textAreaWidget) handleKey(ke input.KeyEvent) bool {
 // same on-screen position even when a wide rune (e.g. CJK) on one of
 // the two lines shifts rune-count and screen column out of step. shift
 // extends (or starts) the active selection to the new position, same
-// as every other movement here — see moveTo.
+// as every other movement here — see moveTo. Under SoftWrap it moves
+// by screen row instead (see moveRows).
 func (w *textAreaWidget) moveVertical(delta int, shift bool) {
+	if rows, ok := w.softWrapRows(); ok {
+		w.moveRows(rows, delta, false, shift)
+		return
+	}
 	lineStart, lineEnd := lineBounds(w.buf, w.cursor)
 	col := visualWidth(w.buf, lineStart, w.cursor)
 
@@ -618,11 +827,16 @@ func (w *textAreaWidget) moveVertical(delta int, shift bool) {
 // dir>0 down), same visual-column-clamping convention as moveVertical
 // — it's moveVertical's shape with a multi-line delta instead of ±1.
 // Falls back to a single line if lastVisibleLines hasn't been set yet
-// (i.e. before the first Paint).
+// (i.e. before the first Paint). Under SoftWrap a screenful is
+// counted in screen rows (see moveRows).
 func (w *textAreaWidget) movePage(dir int, shift bool) {
 	n := w.lastVisibleLines
 	if n <= 0 {
 		n = 1
+	}
+	if rows, ok := w.softWrapRows(); ok {
+		w.moveRows(rows, dir*n, true, shift)
+		return
 	}
 
 	lines := splitLines(w.buf)
@@ -634,6 +848,29 @@ func (w *textAreaWidget) movePage(dir int, shift bool) {
 
 	ln := lines[target]
 	w.moveTo(columnToIndex(w.buf, ln.start, ln.end, col), shift)
+}
+
+// moveRows is moveVertical/movePage for soft wrap: it moves the
+// cursor delta screen rows, keeping its column within the row (see
+// rowColumnToIndex for where a too-short row clamps it). Moving past
+// the first/last row goes to the start/end of the buffer, like
+// moveVertical on the first/last line — or, with clamp (paging), stops
+// on the first/last row like movePage.
+func (w *textAreaWidget) moveRows(rows []visualRow, delta int, clamp, shift bool) {
+	ri := rowIndexOf(rows, w.cursor)
+	col := visualWidth(w.buf, rows[ri].seg.start, w.cursor)
+	target := ri + delta
+	switch {
+	case clamp:
+		target = max(0, min(target, len(rows)-1))
+	case target < 0:
+		w.moveTo(0, shift)
+		return
+	case target >= len(rows):
+		w.moveTo(len(w.buf), shift)
+		return
+	}
+	w.moveTo(rowColumnToIndex(w.buf, rows[target], col), shift)
 }
 
 // isWordChar reports whether r is part of a "word" for Ctrl+Left/
@@ -712,6 +949,14 @@ func (w *textAreaWidget) setCursorFromMouse(me input.MouseEvent) {
 	if !w.opts.Frameless {
 		x--
 		y-- // top/left border
+	}
+
+	x -= w.lastGutterW // a click on the gutter itself lands on column 0
+
+	if rows, ok := w.softWrapRows(); ok {
+		ri := max(0, min(w.scrollRow+y, len(rows)-1))
+		w.cursor = rowColumnToIndex(w.buf, rows[ri], max(0, x))
+		return
 	}
 
 	lines := splitLines(w.buf)

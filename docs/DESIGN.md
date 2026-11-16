@@ -257,7 +257,12 @@ widget: PTY output bytes feed `vt.Parser`, which mutates a `vt.Screen`; the
 widget's `Paint()` blits that screen's cells straight into the `Painter`'s
 rect; its `HandleEvent()` does the reverse — encodes key/mouse `input.Event`s
 back into bytes written to the PTY master. This is what makes a real shell,
-editor, or pager runnable inside a pane.
+editor, or pager runnable inside a pane. `TerminalOptions` takes either
+`Command` (spawn a local child via `pty.Start`, the original path) or
+`Stream` (drive from an already-live `pty.Stream` — `Read`/`Write`/`Close`/
+`Resize`, which `*pty.Pty` itself satisfies) — a host can hand it any live
+connection this way, e.g. a remote job's own stdin/stdout, with no local
+PTY involved at all.
 
 ---
 
@@ -285,6 +290,12 @@ Capabilities:
   the kernel's normal `^C`/`^Z` line-discipline handling for the child
   doesn't kick in the way it would in cooked mode; this has to be done by
   hand and is flagged as a specific risk area in §9.
+- `Stream` interface (`Read`/`Write`/`Close`/`Resize`) — the minimal shape
+  `widget.Terminal` actually needs from a live connection; `*Pty` satisfies
+  it, so `Terminal`'s original `Command`-driven path is just its `Start`
+  case. A non-local connection (e.g. a remote job's own stdin/stdout) can
+  satisfy `Stream` with its own type instead, without this package's
+  `openpty`/`Start` machinery involved at all.
 - `io.Reader`/`io.Writer` on the master fd, `Close()` with full cleanup,
   exit-status propagation.
 
@@ -858,6 +869,46 @@ rather than being a late add-on.
   exist yet) — the strongest form of this project's standing revert-
   and-confirm verification discipline. `go build/vet/gofmt/test -race`
   clean across the whole repo.
+
+- **`TextArea`: opt-in soft wrap — done.** Surfaced by 9ed's Edit
+  mode, where long Markdown/prose lines only scrolled horizontally.
+  The original "scroll, don't wrap" choice (one screen row per buffer
+  line, so cursor math stays exact) is kept as the default; the new
+  `TextAreaOptions.SoftWrap bool` adds wrapping alongside it rather
+  than replacing it. Display-only: buffer content and every rune
+  offset (`InitialCursor`, `OnCursorChange`, `Highlights`, selection)
+  are unchanged. `wrapLine` splits a buffer line into segments that
+  break after the last space/tab that fits, breaking mid-word only for
+  a word wider than the row; content fills at most `width-1` columns,
+  keeping the last column for the end-of-line cursor or one hanging
+  trailing space (so neither needs a special case to stay visible).
+  `Paint`'s per-row loop was extracted into `paintSegment(seg,
+  skipCols, cursorAtEnd)` and is shared by both layouts: unwrapped
+  passes a whole line plus `scrollCol`; wrapped passes one segment with
+  no horizontal scroll, and `cursorAtEnd` false on all but a line's
+  last row, since an earlier row's end offset *is* the next row's
+  start and the cursor there belongs to the next row. Under soft wrap
+  `scrollRow` counts screen rows; the gutter is sized from every line
+  within `innerH` of the cursor's (a superset of what can be on
+  screen), breaking the gutter-width ↔ wrap-width cycle at the cost of
+  occasionally being one digit wide early. `Up`/`Down`/`PageUp`/
+  `PageDown` move by screen row (`moveRows`), keeping the column and
+  clamping onto a row's last rune rather than its boundary offset;
+  `Home`/`End` deliberately stay whole-line. Key and mouse handling
+  run outside `Paint`, so the last `Paint`'s text width is retained
+  (`lastTextW`, the same approach as `lastVisibleLines` for paging),
+  falling back to line movement before the first `Paint`. **Fixed in
+  passing**: `setCursorFromMouse` never subtracted the gutter's width,
+  so with a `Gutter` set every click landed `gutterW` columns to the
+  right of where it was aimed; it now uses the retained `lastGutterW`
+  in both layouts (confirmed the new tests fail with the subtraction
+  removed). 14 new tests in `widget/textarea_softwrap_test.go`
+  (`wrapLine` edge cases incl. hanging space, wide runes and width 1;
+  painting; toggling between frames; boundary and end-of-line cursor;
+  row-wise Up/Down/PageDown and the row clamp; whole-line Home/End;
+  clicks on continuation rows and past a gutter, wrapped and not; a
+  gutter numbering only first rows; highlights and selection across a
+  wrap). `go build/vet/gofmt/test -race` clean across the whole repo.
 
 ---
 

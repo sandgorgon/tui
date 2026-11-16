@@ -870,6 +870,46 @@ rather than being a late add-on.
   and-confirm verification discipline. `go build/vet/gofmt/test -race`
   clean across the whole repo.
 
+- **`TextArea`: opt-in soft wrap — done.** Surfaced by 9ed's Edit
+  mode, where long Markdown/prose lines only scrolled horizontally.
+  The original "scroll, don't wrap" choice (one screen row per buffer
+  line, so cursor math stays exact) is kept as the default; the new
+  `TextAreaOptions.SoftWrap bool` adds wrapping alongside it rather
+  than replacing it. Display-only: buffer content and every rune
+  offset (`InitialCursor`, `OnCursorChange`, `Highlights`, selection)
+  are unchanged. `wrapLine` splits a buffer line into segments that
+  break after the last space/tab that fits, breaking mid-word only for
+  a word wider than the row; content fills at most `width-1` columns,
+  keeping the last column for the end-of-line cursor or one hanging
+  trailing space (so neither needs a special case to stay visible).
+  `Paint`'s per-row loop was extracted into `paintSegment(seg,
+  skipCols, cursorAtEnd)` and is shared by both layouts: unwrapped
+  passes a whole line plus `scrollCol`; wrapped passes one segment with
+  no horizontal scroll, and `cursorAtEnd` false on all but a line's
+  last row, since an earlier row's end offset *is* the next row's
+  start and the cursor there belongs to the next row. Under soft wrap
+  `scrollRow` counts screen rows; the gutter is sized from every line
+  within `innerH` of the cursor's (a superset of what can be on
+  screen), breaking the gutter-width ↔ wrap-width cycle at the cost of
+  occasionally being one digit wide early. `Up`/`Down`/`PageUp`/
+  `PageDown` move by screen row (`moveRows`), keeping the column and
+  clamping onto a row's last rune rather than its boundary offset;
+  `Home`/`End` deliberately stay whole-line. Key and mouse handling
+  run outside `Paint`, so the last `Paint`'s text width is retained
+  (`lastTextW`, the same approach as `lastVisibleLines` for paging),
+  falling back to line movement before the first `Paint`. **Fixed in
+  passing**: `setCursorFromMouse` never subtracted the gutter's width,
+  so with a `Gutter` set every click landed `gutterW` columns to the
+  right of where it was aimed; it now uses the retained `lastGutterW`
+  in both layouts (confirmed the new tests fail with the subtraction
+  removed). 14 new tests in `widget/textarea_softwrap_test.go`
+  (`wrapLine` edge cases incl. hanging space, wide runes and width 1;
+  painting; toggling between frames; boundary and end-of-line cursor;
+  row-wise Up/Down/PageDown and the row clamp; whole-line Home/End;
+  clicks on continuation rows and past a gutter, wrapped and not; a
+  gutter numbering only first rows; highlights and selection across a
+  wrap). `go build/vet/gofmt/test -race` clean across the whole repo.
+
 ---
 
 ## 10. Testing strategy
